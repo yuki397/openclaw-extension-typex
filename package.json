@@ -1,6 +1,6 @@
 {
-  "name": "openclaw-extension-typex",
-  "version": "1.0.3",
+  "name": "typex",
+  "version": "1.0.7",
   "description": "TypeX channel integration for OpenClaw",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -38,18 +38,6 @@
   "openclaw": {
     "extensions": [
       "./dist/index.js"
-    ],
-    "channel": {
-      "id": "typex",
-      "label": "TypeX",
-      "selectionLabel": "TypeX (QR Code Login)",
-      "detailLabel": "TypeX Bot",
-      "blurb": "TypeX bot via QR Code login.",
-      "aliases": [
-        "typex"
-      ],
-      "order": 100,
-      "quickstartAllowFrom": true
-    }
+    ]
   }
 }

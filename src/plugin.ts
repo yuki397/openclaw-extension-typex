@@ -8,11 +8,11 @@ import { typexOnboardingAdapter } from "./onboarding.js";
 const meta = {
   id: "typex",
   label: "TypeX",
-  selectionLabel: "TypeX Channel",
+  selectionLabel: "TypeX (QR Code Login)",
   detailLabel: "TypeX Bot",
   docsPath: "/channels/typex",
   docsLabel: "typex",
-  blurb: "Integration with TypeX platform.",
+  blurb: "TypeX bot via QR Code login.",
   order: 100,
 };
 
