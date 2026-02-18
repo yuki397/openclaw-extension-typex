@@ -56,7 +56,9 @@ export async function monitorTypeXProvider(opts: MonitorTypeXOpts) {
     // --- Polling Loop ---
     while (!abortSignal.aborted) {
       try {
+        logger?.info(`[${accountObj.accountId}] Polling TypeX messages (pos: ${currentPos})...`);
         const messages = await client.fetchMessages(currentPos);
+        logger?.info(`[${accountObj.accountId}] Received ${messages?.length || 0} messages.`);
 
         if (messages && messages.length > 0) {
           for (const msg of messages) {
@@ -85,8 +87,8 @@ export async function monitorTypeXProvider(opts: MonitorTypeXOpts) {
         break;
       }
       await new Promise((resolve) => setTimeout(resolve, 3000));
-      logger?.info(`Stopping TypeX monitor...`);
     }
+    logger?.info(`Stopping TypeX monitor...`);
   } catch (e) {
     throw e;
   }

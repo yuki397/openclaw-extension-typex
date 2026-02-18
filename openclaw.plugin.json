@@ -1,8 +1,11 @@
 {
-  "id": "openclaw-extension-typex",
-  "name": "openclaw-extension-typex",
+  "id": "typex",
+  "name": "typex",
   "version": "1.0.0",
   "description": "TypeX channel integration for OpenClaw",
+  "channels": [
+    "typex"
+  ],
   "entry": "dist/index.js",
   "configSchema": {
     "type": "object",

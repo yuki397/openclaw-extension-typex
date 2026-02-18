@@ -4,7 +4,7 @@ import { TypeXMessageEnum, type TypeXClientOptions } from "./types.js";
 const TYPEX_DOMAIN = "https://api-coco.typex.im";
 // const TYPEX_DOMAIN = "https://api-tx.bossjob.net.cn";
 
-let prompter: WizardPrompter;
+let prompter: WizardPrompter | undefined;
 
 export class TypeXClient {
   private options: TypeXClientOptions;
@@ -100,15 +100,15 @@ export class TypeXClient {
         finalContent = JSON.stringify(content);
       } catch (e) {
         if (e instanceof Error) {
-          prompter.note("Failed to stringify message content");
+          if (prompter) prompter.note("Failed to stringify message content");
+          else console.log("Failed to stringify message content");
         }
         finalContent = String(content as unknown);
       }
     }
 
-    prompter.note(
-      `TypeXClient sending message: content=${typeof finalContent === "string" ? finalContent : JSON.stringify(finalContent)}`,
-    );
+    if (prompter) prompter.note(`TypeXClient sending message: content=${typeof finalContent === "string" ? finalContent : JSON.stringify(finalContent)}`);
+    else console.log(`TypeXClient sending message: content=${typeof finalContent === "string" ? finalContent : JSON.stringify(finalContent)}`);
 
     try {
       const url = `${TYPEX_DOMAIN}/open/claw/send_message`;
@@ -131,7 +131,8 @@ export class TypeXClient {
         throw new Error(`Send message failed: [${resJson.code}] ${resJson.message}`);
       }
 
-      prompter.note("Message sent successfully", resJson.data);
+      if (prompter) prompter.note("Message sent successfully", resJson.data);
+      else console.log("Message sent successfully", JSON.stringify(resJson.data));
 
       return (
         resJson.data || {
@@ -139,20 +140,23 @@ export class TypeXClient {
         }
       );
     } catch (error) {
-      prompter.note(`Error sending message to TypeX API: ${error}`);
+      if (prompter) prompter.note(`Error sending message to TypeX API: ${error}`);
+      else console.log(`Error sending message to TypeX API: ${error}`);
       throw error;
     }
   }
 
   async fetchMessages(pos: number) {
     if (!this.accessToken) {
-      prompter.note("TypeXClient: No token, skipping fetch.");
+      if (prompter) prompter.note("TypeXClient: No token, skipping fetch.");
+      else console.log("TypeXClient: No token, skipping fetch.");
       return [];
     }
 
     try {
       const url = `${TYPEX_DOMAIN}/open/claw/message`;
-      prompter.note(`Fetching messages from pos: ${pos}`);
+      if (prompter) prompter.note(`Fetching messages from pos: ${pos}`);
+      // else console.log(`Fetching messages from pos: ${pos}`);
       const response = await fetch(url, {
         method: "POST",
         headers: {
@@ -165,7 +169,8 @@ export class TypeXClient {
       const resJson = await response.json();
 
       if (resJson.code !== 0) {
-        prompter.note(`Fetch failed with code ${resJson.code}: ${resJson.message}`);
+        if (prompter) prompter.note(`Fetch failed with code ${resJson.code}: ${resJson.message}`);
+        else console.log(`Fetch failed with code ${resJson.code}: ${resJson.message}`);
         return [];
       }
       if (Array.isArray(resJson.data)) {
@@ -174,7 +179,8 @@ export class TypeXClient {
 
       return [];
     } catch (e) {
-      prompter.note(`Fetch messages network error: ${e}`);
+      if (prompter) prompter.note(`Fetch messages network error: ${e}`);
+      else console.log(`Fetch messages network error: ${e}`);
       return [];
     }
   }
