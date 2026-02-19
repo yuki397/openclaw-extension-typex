@@ -4,13 +4,13 @@
 
 import type { PluginRuntime } from "openclaw/plugin-sdk";
 
-let runtime: any = null;
+let runtime: PluginRuntime | null = null;
 
-export function setTypeXRuntime(next: any): void {
+export function setTypeXRuntime(next: PluginRuntime): void {
   runtime = next;
 }
 
-export function getTypeXRuntime(): any {
+export function getTypeXRuntime(): PluginRuntime {
   if (!runtime) {
     throw new Error("TypeX runtime not initialized");
   }

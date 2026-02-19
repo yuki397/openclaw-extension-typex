@@ -6,7 +6,7 @@ import { TypeXConfigSchema } from "./config-schema.js";
 import { typexOnboardingAdapter } from "./onboarding.js";
 
 const meta = {
-  id: "typex",
+  id: "openclaw-extension-typex",
   label: "TypeX",
   selectionLabel: "TypeX (QR Code Login)",
   detailLabel: "TypeX Bot",
@@ -17,7 +17,7 @@ const meta = {
 };
 
 export const typexPlugin = {
-  id: "typex",
+  id: "openclaw-extension-typex",
   meta,
   onboarding: typexOnboardingAdapter,
   capabilities: {

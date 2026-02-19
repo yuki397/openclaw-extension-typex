@@ -38,7 +38,10 @@ export async function monitorTypeXProvider(opts: MonitorTypeXOpts) {
       `[${accountObj.accountId}] Starting TypeX monitor for ${email || accountObj.accountId}...`,
     );
 
-    const dataDir = (runtime as unknown as { dirs?: { data?: string } }).dirs?.data || "./";
+    const dataDir = (runtime as any).dirs?.state || (runtime as any).dirs?.data || "/tmp/typex";
+    if (dataDir === "/tmp/typex") {
+      await fs.mkdir(dataDir, { recursive: true }).catch(() => { });
+    }
     const safeId = (email || accountObj.accountId || "default").replace(/[^a-z0-9]/gi, "_");
     const stateFile = path.join(dataDir, `.typex_pos_${safeId}.json`);
 

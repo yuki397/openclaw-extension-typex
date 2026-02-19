@@ -98,6 +98,7 @@ export async function processTypeXMessage(
     },
     replyOptions: {
       disableBlockStreaming: true,
+      embedded: true,
     },
   });
 }

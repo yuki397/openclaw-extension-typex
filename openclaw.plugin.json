@@ -1,7 +1,7 @@
 {
-  "id": "typex",
+  "id": "openclaw-extension-typex",
   "name": "typex",
-  "version": "1.0.6",
+  "version": "1.0.8",
   "description": "TypeX channel integration for OpenClaw",
   "channels": [
     "typex"
