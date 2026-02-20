@@ -44,14 +44,14 @@ export const typexPlugin = {
 
   config: {
     listAccountIds: (cfg) => {
-      const accs = cfg.channels?.typex?.accounts || {};
+      const accs = cfg.channels?.['openclaw-extension-typex']?.accounts || {};
       return Object.keys(accs);
     },
     resolveAccount: (cfg, accountId) => {
       const id = accountId || DEFAULT_ACCOUNT_ID;
-      const globalCheck = cfg.channels?.typex;
+      const globalCheck = cfg.channels?.['openclaw-extension-typex'];
       const account =
-        cfg.channels?.typex?.accounts?.[id] ||
+        cfg.channels?.['openclaw-extension-typex']?.accounts?.[id] ||
         (id === DEFAULT_ACCOUNT_ID ? globalCheck : undefined);
       return {
         accountId: id,
@@ -63,7 +63,7 @@ export const typexPlugin = {
       };
     },
     defaultAccountId: (cfg) => {
-      const accs = cfg.channels?.typex?.accounts || {};
+      const accs = cfg.channels?.['openclaw-extension-typex']?.accounts || {};
       const first = Object.keys(accs)[0];
       return first || DEFAULT_ACCOUNT_ID;
     },
@@ -84,7 +84,7 @@ export const typexPlugin = {
   gateway: {
     startAccount: async (ctx) => {
       const { account, log, setStatus, abortSignal, runtime, cfg } = ctx;
-      const typexCfg = (cfg.channels?.typex ?? {}) as Record<string, any>;
+      const typexCfg = (cfg.channels?.['openclaw-extension-typex'] ?? {}) as Record<string, any>;
 
       log?.info(`[${account.accountId}] TypeX Provider starting...`);
 

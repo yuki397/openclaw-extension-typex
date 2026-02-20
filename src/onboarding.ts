@@ -4,16 +4,15 @@ import { resolveDefaultTypeXAccountId } from "./client/accounts.js";
 import { getTypeXClient } from "./client/client.js";
 
 export const typexOnboardingAdapter: ChannelOnboardingAdapter = {
-  channel: "typex",
+  channel: "openclaw-extension-typex",
   getStatus: async ({ cfg }) => {
     const accountId = resolveDefaultTypeXAccountId(cfg);
     const configured = Boolean(
-      cfg.channels?.typex?.accounts?.[accountId]?.email &&
-      cfg.channels?.typex?.accounts?.[accountId]?.token,
+      cfg.channels?.['openclaw-extension-typex']?.accounts?.[accountId]?.token,
     );
 
     return {
-      channel: "typex",
+      channel: "openclaw-extension-typex",
       configured,
       statusLines: [`TypeX (${accountId}): ${configured ? "configured" : "not configured"}`],
       selectionHint: configured ? "configured" : "setup needed",
@@ -21,7 +20,7 @@ export const typexOnboardingAdapter: ChannelOnboardingAdapter = {
     };
   },
   configure: async ({ cfg, prompter }) => {
-    const typexCfg = (cfg.channels?.typex ?? {}) as Record<string, any>;
+    const typexCfg = (cfg.channels?.['openclaw-extension-typex'] ?? {}) as Record<string, any>;
     const client = getTypeXClient(undefined, { skipConfigCheck: true, typexCfg, prompter });
     await prompter.note(`Initializing TypeX ...\nPlease scan the QR code shortly.`, "TypeX Setup");
 
@@ -63,14 +62,14 @@ export const typexOnboardingAdapter: ChannelOnboardingAdapter = {
       }
 
       if (!cfg.channels) cfg.channels = {};
-      if (!cfg.channels.typex) cfg.channels.typex = {};
-      if (!cfg.channels.typex.accounts) cfg.channels.typex.accounts = {};
+      if (!cfg.channels['openclaw-extension-typex']) cfg.channels['openclaw-extension-typex'] = {};
+      if (!cfg.channels['openclaw-extension-typex'].accounts) cfg.channels['openclaw-extension-typex'].accounts = {};
 
       // save config
-      cfg.channels.typex.accounts[userId] = {
+      cfg.channels['openclaw-extension-typex'].accounts[userId] = {
         token: token,
       };
-      cfg.channels.typex.defaultAccount = userId;
+      cfg.channels['openclaw-extension-typex'].defaultAccount = userId;
 
       await prompter.note("Success! TypeX linked.", "Done");
       await client.sendMessage("openclaw linked");

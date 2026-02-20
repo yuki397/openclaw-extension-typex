@@ -12,7 +12,7 @@ export const typexOutbound: ChannelOutboundAdapter = {
     const client = getTypeXClient(accountId ?? undefined);
     const result = await sendMessageTypeX(client, { text });
     return {
-      channel: "typex",
+      channel: "openclaw-extension-typex",
       messageId: result?.message_id || "unknown",
       chatId: to,
     };
@@ -22,7 +22,7 @@ export const typexOutbound: ChannelOutboundAdapter = {
     const client = getTypeXClient(accountId ?? undefined);
     const result = await sendMessageTypeX(client, { text: text || "" }, { mediaUrl });
     return {
-      channel: "typex",
+      channel: "openclaw-extension-typex",
       messageId: result?.message_id || "unknown",
       chatId: to,
     };

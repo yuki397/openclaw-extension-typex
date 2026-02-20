@@ -44,6 +44,7 @@ export async function processTypeXMessage(
 
   // Basic logging
   logger?.info(`Processing TypeX message from ${senderId} in ${chatId}`);
+  logger?.info(`channel: ${JSON.stringify(channel)}, account: ${accountId}, type: ${typeof accountId}}`);
 
   // Build Context for Agent
   const ctx = {
@@ -54,12 +55,12 @@ export async function processTypeXMessage(
     SenderId: senderId,
     SenderName: payload.sender_name || "User",
     ChatType: "dm", // Simplified, TypeX mostly DM for now?
-    Provider: "typex",
-    Surface: "typex",
+    Provider: "openclaw-extension-typex",
+    Surface: "openclaw-extension-typex",
     Timestamp: payload.create_time || Date.now(),
     MessageSid: payload.message_id,
     AccountId: accountId,
-    OriginatingChannel: "typex",
+    OriginatingChannel: "openclaw-extension-typex",
     OriginatingTo: chatId,
   };
 
@@ -68,9 +69,10 @@ export async function processTypeXMessage(
     ctx,
     cfg,
     dispatcherOptions: {
-      channel: "typex",
+      channel: "openclaw-extension-typex",
       accountId,
       deliver: async (payload: unknown) => {
+        logger?.info(`payload: ${payload}`)
         const responsePayload = payload as {
           text?: string;
           mediaUrls?: string[];

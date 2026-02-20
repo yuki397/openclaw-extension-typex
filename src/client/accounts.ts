@@ -28,7 +28,7 @@ function resolveAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): TypeXAccountConfig | undefined {
-  const accounts = cfg.channels?.typex?.accounts;
+  const accounts = cfg.channels?.['openclaw-extension-typex']?.accounts;
   if (!accounts || typeof accounts !== "object") {
     return undefined;
   }
@@ -42,7 +42,7 @@ function resolveAccountConfig(
 }
 
 function mergeTypeXAccountConfig(cfg: OpenClawConfig, accountId: string): TypeXAccountConfig {
-  const { accounts: _ignored, ...base } = (cfg.channels?.typex ?? {}) as TypeXAccountConfig & {
+  const { accounts: _ignored, ...base } = (cfg.channels?.['openclaw-extension-typex'] ?? {}) as TypeXAccountConfig & {
     accounts?: unknown;
   };
   const account = resolveAccountConfig(cfg, accountId) ?? {};
@@ -65,7 +65,7 @@ function resolveAppSecret(config?: { appSecret?: string; appSecretFile?: string 
 }
 
 export function listTypeXAccountIds(cfg: OpenClawConfig): string[] {
-  const typexCfg = cfg.channels?.typex;
+  const typexCfg = cfg.channels?.['openclaw-extension-typex'];
   const accounts = typexCfg?.accounts;
   const ids = new Set<string>();
 
@@ -101,7 +101,7 @@ export function resolveTypeXAccount(params: {
   accountId?: string | null;
 }): ResolvedTypeXAccount {
   const accountId = normalizeAccountId(params.accountId);
-  const baseEnabled = params.cfg.channels?.typex?.enabled !== false;
+  const baseEnabled = params.cfg.channels?.['openclaw-extension-typex']?.enabled !== false;
   const merged = mergeTypeXAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;
