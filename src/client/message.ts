@@ -2,9 +2,10 @@ import type { TypeXClient } from "./client.js";
 import type { TypeXMessageEntry } from "./types.js";
 import { sendMessageTypeX } from "./send.js";
 import { getTypeXRuntime } from "./runtime.js";
-import { OpenClawConfig } from "openclaw/plugin-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
 
 export type ProcessTypeXMessageOptions = {
+  /** Full OpenClaw gateway config (needed for bindings/routing). */
   cfg?: OpenClawConfig;
   accountId?: string;
   botName?: string;
@@ -26,7 +27,14 @@ export async function processTypeXMessage(
   const logger = options.logger;
   const runtime = getTypeXRuntime();
   const channel = (runtime as Record<string, unknown>).channel as
-    | { reply?: { dispatchReplyWithBufferedBlockDispatcher?: (opts: unknown) => Promise<unknown> } }
+    | {
+        reply?: {
+          dispatchReplyWithBufferedBlockDispatcher?: (opts: unknown) => Promise<unknown>;
+        };
+        routing?: {
+          resolveAgentRoute?: (input: unknown) => any;
+        };
+      }
     | undefined;
   if (!channel?.reply?.dispatchReplyWithBufferedBlockDispatcher) {
     logger?.error(`[typex:${accountId}] dispatchReplyWithBufferedBlockDispatcher not available`);
@@ -73,7 +81,7 @@ export async function processTypeXMessage(
 
   // Resolve agent route (bindings) and stamp SessionKey so the message runs in the right agent lane.
   try {
-    const routing = (channel as any).routing;
+    const routing = channel.routing;
     const route = routing?.resolveAgentRoute?.({
       cfg,
       channel: "openclaw-extension-typex",

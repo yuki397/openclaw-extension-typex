@@ -2,7 +2,7 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import { getTypeXClient } from "./client.js";
 import { processTypeXMessage } from "./message.js";
-import type { RuntimeEnv } from "openclaw/plugin-sdk";
+import type { RuntimeEnv, OpenClawConfig } from "openclaw/plugin-sdk";
 
 export type MonitorTypeXOpts = {
   account: unknown; // ResolvedTypeXAccount + extras from gateway
@@ -11,7 +11,7 @@ export type MonitorTypeXOpts = {
   log?: unknown;
   typexCfg: Record<string, any>;
   /** Full OpenClaw gateway config (needed for bindings/routing). */
-  cfg: any;
+  cfg: OpenClawConfig;
 };
 
 export async function monitorTypeXProvider(opts: MonitorTypeXOpts) {
