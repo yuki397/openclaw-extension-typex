@@ -100,7 +100,8 @@ export const typexPlugin = {
           runtime,
           abortSignal,
           log,
-          typexCfg
+          typexCfg,
+          cfg,
         });
       } catch (err) {
         log?.error(`TypeX Provider crashed: ${err}`);

@@ -10,11 +10,13 @@ export type MonitorTypeXOpts = {
   abortSignal: AbortSignal;
   log?: unknown;
   typexCfg: Record<string, any>;
+  /** Full OpenClaw gateway config (needed for bindings/routing). */
+  cfg: any;
 };
 
 export async function monitorTypeXProvider(opts: MonitorTypeXOpts) {
   try {
-    const { account, runtime, abortSignal, log, typexCfg } = opts;
+    const { account, runtime, abortSignal, log, typexCfg, cfg } = opts;
     const accountObj = account as {
       config: { email?: string; token?: string; appId?: string };
       accountId: string;
@@ -68,6 +70,8 @@ export async function monitorTypeXProvider(opts: MonitorTypeXOpts) {
             // Dispatch to OpenClaw via processTypeXMessage
             await processTypeXMessage(client, msg, appId || accountObj.accountId, {
               accountId: accountObj.accountId,
+              // Pass the full OpenClaw config so routing/bindings work.
+              cfg,
               typexCfg,
               botName: accountObj.name,
               logger

@@ -19,7 +19,9 @@ export async function processTypeXMessage(
   appId: string,
   options: ProcessTypeXMessageOptions = {},
 ) {
-  const cfg = options.typexCfg;
+  // Use the full OpenClaw config for routing/bindings + dispatch.
+  // (typexCfg is only the channel-specific config.)
+  const cfg = options.cfg;
   const accountId = options.accountId ?? appId;
   const logger = options.logger;
   const runtime = getTypeXRuntime();
@@ -64,6 +66,28 @@ export async function processTypeXMessage(
     OriginatingTo: chatId,
   };
 
+  if (!cfg) {
+    logger?.error(`[typex:${accountId}] missing full OpenClaw cfg; cannot route/bind.`);
+    return;
+  }
+
+  // Resolve agent route (bindings) and stamp SessionKey so the message runs in the right agent lane.
+  try {
+    const routing = (channel as any).routing;
+    const route = routing?.resolveAgentRoute?.({
+      cfg,
+      channel: "openclaw-extension-typex",
+      accountId,
+      peer: { kind: "direct", id: String(chatId) },
+    });
+    if (route?.sessionKey) {
+      (ctx as any).SessionKey = route.sessionKey;
+      logger?.info(`[typex:${accountId}] resolved route: agentId=${route.agentId} matchedBy=${route.matchedBy} sessionKey=${route.sessionKey}`);
+    }
+  } catch (e: any) {
+    logger?.error(`[typex:${accountId}] resolveAgentRoute failed: ${e?.message || String(e)}`);
+  }
+
   // Dispatch to Agent
   await channel.reply.dispatchReplyWithBufferedBlockDispatcher({
     ctx,
@@ -100,7 +124,8 @@ export async function processTypeXMessage(
     },
     replyOptions: {
       disableBlockStreaming: true,
-      embedded: true,
+      // Do not use embedded agent; let gateway bindings decide the agent.
+      embedded: false,
     },
   });
 }
