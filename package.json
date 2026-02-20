@@ -1,6 +1,6 @@
 {
   "name": "openclaw-extension-typex",
-  "version": "1.0.12",
+  "version": "1.0.13",
   "description": "TypeX channel integration for OpenClaw",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
