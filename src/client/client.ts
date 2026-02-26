@@ -1,8 +1,8 @@
 import { OpenClawConfig, WizardPrompter } from "openclaw/plugin-sdk";
 import { TypeXMessageEnum, type TypeXClientOptions } from "./types.js";
 
-const TYPEX_DOMAIN = "https://api-coco.typex.im";
-// const TYPEX_DOMAIN = "https://api-tx.bossjob.net.cn";
+// const TYPEX_DOMAIN = "https://api-coco.typex.im";
+const TYPEX_DOMAIN = "https://api-tx.bossjob.net.cn";
 
 let prompter: WizardPrompter | undefined;
 
@@ -89,6 +89,7 @@ export class TypeXClient {
   }
 
   async sendMessage(content: string | object, msgType: TypeXMessageEnum = 0) {
+    console.info("msgType: ", msgType);
     const token = this.accessToken;
     if (!token) {
       throw new Error("TypeXClient: Not authenticated.");
@@ -200,7 +201,7 @@ export function getTypeXClient(accountId?: string, manualOptions?: TypeXClientOp
   }
 
   if (!manualOptions?.skipConfigCheck) {
-    throw new Error("TypeX email not configured yet.");
+    throw new Error("TypeX not configured yet.");
   }
 
   return new TypeXClient({

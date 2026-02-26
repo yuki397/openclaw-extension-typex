@@ -1,5 +1,5 @@
 import type { TypeXClient } from "./client.js";
-import type { TypeXMessageEntry } from "./types.js";
+import { TypeXMessageEnum, type TypeXMessageEntry } from "./types.js";
 import { sendMessageTypeX } from "./send.js";
 import { getTypeXRuntime } from "./runtime.js";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
@@ -28,13 +28,13 @@ export async function processTypeXMessage(
   const runtime = getTypeXRuntime();
   const channel = (runtime as Record<string, unknown>).channel as
     | {
-        reply?: {
-          dispatchReplyWithBufferedBlockDispatcher?: (opts: unknown) => Promise<unknown>;
-        };
-        routing?: {
-          resolveAgentRoute?: (input: unknown) => any;
-        };
-      }
+      reply?: {
+        dispatchReplyWithBufferedBlockDispatcher?: (opts: unknown) => Promise<unknown>;
+      };
+      routing?: {
+        resolveAgentRoute?: (input: unknown) => any;
+      };
+    }
     | undefined;
   if (!channel?.reply?.dispatchReplyWithBufferedBlockDispatcher) {
     logger?.error(`[typex:${accountId}] dispatchReplyWithBufferedBlockDispatcher not available`);
@@ -54,7 +54,6 @@ export async function processTypeXMessage(
 
   // Basic logging
   logger?.info(`Processing TypeX message from ${senderId} in ${chatId}`);
-  logger?.info(`channel: ${JSON.stringify(channel)}, account: ${accountId}, type: ${typeof accountId}}`);
 
   // Build Context for Agent
   const ctx = {
@@ -104,7 +103,6 @@ export async function processTypeXMessage(
       channel: "openclaw-extension-typex",
       accountId,
       deliver: async (payload: unknown) => {
-        logger?.info(`payload: ${payload}`)
         const responsePayload = payload as {
           text?: string;
           mediaUrls?: string[];
@@ -112,7 +110,7 @@ export async function processTypeXMessage(
         };
         // Handle text response
         if (responsePayload.text) {
-          await sendMessageTypeX(client, responsePayload.text);
+          await sendMessageTypeX(client, responsePayload.text, { msgType: TypeXMessageEnum.richText });
         }
 
         // Handle media if present in response
@@ -123,7 +121,7 @@ export async function processTypeXMessage(
             : [];
 
         for (const mediaUrl of mediaUrls) {
-          await sendMessageTypeX(client, {}, { mediaUrl });
+          await sendMessageTypeX(client, {}, { mediaUrl, msgType: TypeXMessageEnum.richText });
         }
       },
       onError: (err: Error) => {

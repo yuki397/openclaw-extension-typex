@@ -18,11 +18,11 @@ export async function monitorTypeXProvider(opts: MonitorTypeXOpts) {
   try {
     const { account, runtime, abortSignal, log, typexCfg, cfg } = opts;
     const accountObj = account as {
-      config: { email?: string; token?: string; appId?: string };
+      config: { token?: string; appId?: string };
       accountId: string;
       name?: string;
     };
-    const { email, token, appId } = accountObj.config;
+    const { token, appId } = accountObj.config;
     // log is unknown, cast for usage
     const logger = log as
       | { warn: (msg: string) => void; info: (msg: string) => void; error: (msg: string) => void }
@@ -37,15 +37,13 @@ export async function monitorTypeXProvider(opts: MonitorTypeXOpts) {
     const client = getTypeXClient(undefined, { token, skipConfigCheck: true });
 
     logger?.info(
-      `[${accountObj.accountId}] Starting TypeX monitor for ${email || accountObj.accountId}...`,
+      `[${accountObj.accountId}] Starting TypeX monitor for ${accountObj.accountId}...`,
     );
 
-    const dataDir = (runtime as any).dirs?.state || (runtime as any).dirs?.data || "/tmp/typex";
-    if (dataDir === "/tmp/typex") {
-      await fs.mkdir(dataDir, { recursive: true }).catch(() => { });
-    }
-    const safeId = (email || accountObj.accountId || "default").replace(/[^a-z0-9]/gi, "_");
-    const stateFile = path.join(dataDir, `.typex_pos_${safeId}.json`);
+    const baseDir = (runtime as any).dirs?.state || (runtime as any).dirs?.data || "/tmp/typex";
+    const accountDir = path.join(baseDir, accountObj.accountId);
+    await fs.mkdir(accountDir, { recursive: true });
+    const stateFile = path.join(accountDir, ".typex_pos.json");
 
     let currentPos = 0;
     try {
@@ -55,13 +53,27 @@ export async function monitorTypeXProvider(opts: MonitorTypeXOpts) {
         currentPos = json.pos;
       }
     } catch {
-      /* Ignore */
+      // New-path file not found — try migrating from legacy path (pre-accountId-subdir layout).
+      try {
+        const safeId = (accountObj.accountId || "default").replace(/[^a-z0-9]/gi, "_");
+        const legacyFile = path.join(baseDir, `.typex_pos_${safeId}.json`);
+        const legacyData = await fs.readFile(legacyFile, "utf-8");
+        const legacyJson = JSON.parse(legacyData);
+        if (typeof legacyJson.pos === "number") {
+          currentPos = legacyJson.pos;
+          // Persist to new location so future starts use the correct pos.
+          await fs.writeFile(stateFile, JSON.stringify({ pos: currentPos }));
+          await fs.unlink(legacyFile).catch(() => { });
+          logger?.info(`[${accountObj.accountId}] Migrated pos (${currentPos}) from legacy state file.`);
+        }
+      } catch {
+        /* No legacy file either — start from 0. */
+      }
     }
 
     // --- Polling Loop ---
     while (!abortSignal.aborted) {
       try {
-        logger?.info(`[${accountObj.accountId}] Polling TypeX messages (pos: ${currentPos})...`);
         const messages = await client.fetchMessages(currentPos);
         logger?.info(`[${accountObj.accountId}] Received ${messages?.length || 0} messages.`);
 
