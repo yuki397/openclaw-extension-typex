@@ -1,8 +1,8 @@
 import { OpenClawConfig, WizardPrompter } from "openclaw/plugin-sdk";
 import { TypeXMessageEnum, type TypeXClientOptions } from "./types.js";
 
-// const TYPEX_DOMAIN = "https://api-coco.typex.im";
-const TYPEX_DOMAIN = "https://api-tx.bossjob.net.cn";
+const TYPEX_DOMAIN = "https://api-coco.typex.im";
+// const TYPEX_DOMAIN = "https://api-tx.bossjob.net.cn";
 
 let prompter: WizardPrompter | undefined;
 
