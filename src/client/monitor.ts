@@ -1,4 +1,5 @@
 import * as fs from "fs/promises";
+import * as os from "os";
 import * as path from "path";
 import { getTypeXClient } from "./client.js";
 import { processTypeXMessage } from "./message.js";
@@ -13,6 +14,66 @@ export type MonitorTypeXOpts = {
   /** Full OpenClaw gateway config (needed for bindings/routing). */
   cfg: OpenClawConfig;
 };
+
+const OPENCLAW_CONFIG_PATH =
+  process.env.OPENCLAW_CONFIG_PATH ||
+  path.join(os.homedir(), ".openclaw", "openclaw.json");
+
+/** Read pos from openclaw.json: channels.openclaw-extension-typex.accounts.<accountId>.pos */
+async function readPos(accountId: string): Promise<number> {
+  try {
+    const raw = await fs.readFile(OPENCLAW_CONFIG_PATH, "utf-8");
+    const cfg = JSON.parse(raw);
+    const pos = cfg?.channels?.["openclaw-extension-typex"]?.accounts?.[accountId]?.pos;
+    if (typeof pos === "number") return pos;
+  } catch {
+    // ignore — will fall through to migration
+  }
+
+  // Migrate from legacy state file locations (pre-openclaw.json storage).
+  // Priority (highest first):
+  //   v1 (oldest): /tmp/typex/.typex_pos_<safeId>.json  — flat-file format
+  //   v2:          /tmp/typex/<accountId>/.typex_pos.json — accountId-subdir format
+  // If v1 exists it takes precedence; v2 is only used when v1 is absent.
+  const safeId = (accountId || "default").replace(/[^a-z0-9]/gi, "_");
+  const legacyCandidates = [
+    path.join("/tmp", "typex", `.typex_pos_${safeId}.json`),          // v1 (oldest)
+    path.join("/tmp", "typex", accountId, ".typex_pos.json"),          // v2
+  ];
+
+  for (const candidate of legacyCandidates) {
+    try {
+      const data = await fs.readFile(candidate, "utf-8");
+      const json = JSON.parse(data);
+      if (typeof json.pos === "number") {
+        // Persist to openclaw.json and remove legacy file.
+        await savePos(accountId, json.pos);
+        await fs.unlink(candidate).catch(() => { });
+        return json.pos;
+      }
+    } catch {
+      /* try next */
+    }
+  }
+
+  return 0;
+}
+
+/** Write pos back into openclaw.json under the account config. */
+async function savePos(accountId: string, pos: number): Promise<void> {
+  try {
+    const raw = await fs.readFile(OPENCLAW_CONFIG_PATH, "utf-8");
+    const cfg = JSON.parse(raw);
+    cfg.channels ??= {};
+    cfg.channels["openclaw-extension-typex"] ??= {};
+    cfg.channels["openclaw-extension-typex"].accounts ??= {};
+    cfg.channels["openclaw-extension-typex"].accounts[accountId] ??= {};
+    cfg.channels["openclaw-extension-typex"].accounts[accountId].pos = pos;
+    await fs.writeFile(OPENCLAW_CONFIG_PATH, JSON.stringify(cfg, null, 4));
+  } catch {
+    // Non-fatal: losing pos means re-processing a few messages at worst.
+  }
+}
 
 export async function monitorTypeXProvider(opts: MonitorTypeXOpts) {
   try {
@@ -40,42 +101,13 @@ export async function monitorTypeXProvider(opts: MonitorTypeXOpts) {
       `[${accountObj.accountId}] Starting TypeX monitor for ${accountObj.accountId}...`,
     );
 
-    const baseDir = (runtime as any).dirs?.state || (runtime as any).dirs?.data || "/tmp/typex";
-    const accountDir = path.join(baseDir, accountObj.accountId);
-    await fs.mkdir(accountDir, { recursive: true });
-    const stateFile = path.join(accountDir, ".typex_pos.json");
-
-    let currentPos = 0;
-    try {
-      const data = await fs.readFile(stateFile, "utf-8");
-      const json = JSON.parse(data);
-      if (typeof json.pos === "number") {
-        currentPos = json.pos;
-      }
-    } catch {
-      // New-path file not found — try migrating from legacy path (pre-accountId-subdir layout).
-      try {
-        const safeId = (accountObj.accountId || "default").replace(/[^a-z0-9]/gi, "_");
-        const legacyFile = path.join(baseDir, `.typex_pos_${safeId}.json`);
-        const legacyData = await fs.readFile(legacyFile, "utf-8");
-        const legacyJson = JSON.parse(legacyData);
-        if (typeof legacyJson.pos === "number") {
-          currentPos = legacyJson.pos;
-          // Persist to new location so future starts use the correct pos.
-          await fs.writeFile(stateFile, JSON.stringify({ pos: currentPos }));
-          await fs.unlink(legacyFile).catch(() => { });
-          logger?.info(`[${accountObj.accountId}] Migrated pos (${currentPos}) from legacy state file.`);
-        }
-      } catch {
-        /* No legacy file either — start from 0. */
-      }
-    }
+    let currentPos = await readPos(accountObj.accountId);
+    logger?.info(`[${accountObj.accountId}] Loaded pos: ${currentPos}`);
 
     // --- Polling Loop ---
     while (!abortSignal.aborted) {
       try {
         const messages = await client.fetchMessages(currentPos);
-        logger?.info(`[${accountObj.accountId}] Received ${messages?.length || 0} messages.`);
 
         if (messages && messages.length > 0) {
           for (const msg of messages) {
@@ -91,10 +123,9 @@ export async function monitorTypeXProvider(opts: MonitorTypeXOpts) {
 
             if (typeof msg.position === "number") {
               currentPos = msg.position;
+              await savePos(accountObj.accountId, currentPos);
             }
           }
-          // Save message position
-          await fs.writeFile(stateFile, JSON.stringify({ pos: currentPos }));
         }
       } catch (err) {
         logger?.error(
