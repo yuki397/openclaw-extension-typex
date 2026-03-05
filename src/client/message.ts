@@ -1,18 +1,48 @@
+/**
+ * message.ts
+ *
+ * Main message dispatch orchestrator for the TypeX standalone plugin.
+ * Pure helpers live in ./message-helpers.ts.
+ */
+
+import type { HistoryEntry, OpenClawConfig } from "openclaw/plugin-sdk";
+import {
+  buildPendingHistoryContextFromMap,
+  clearHistoryEntriesIfEnabled,
+  DEFAULT_GROUP_HISTORY_LIMIT,
+  recordPendingHistoryEntryIfEnabled,
+} from "openclaw/plugin-sdk";
 import type { TypeXClient } from "./client.js";
-import { TypeXMessageEnum, type TypeXMessageEntry } from "./types.js";
-import { sendMessageTypeX } from "./send.js";
+import {
+  buildAgentBody,
+  checkBotMentioned,
+  isAllowedBySenderId,
+  normalizeAllowEntry,
+  normalizeMessageToText,
+  resolveGroupConfig,
+  stripBotMention,
+} from "./message-helpers.js";
 import { getTypeXRuntime } from "./runtime.js";
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import { sendMessageTypeX } from "./send.js";
+import { TypeXMessageEnum, type TypeXMessageEntry } from "./types.js";
 
 export type ProcessTypeXMessageOptions = {
-  /** Full OpenClaw gateway config (needed for bindings/routing). */
   cfg?: OpenClawConfig;
   accountId?: string;
   botName?: string;
   typexCfg?: Record<string, any>;
-  logger?: { warn: (msg: string) => void; info: (msg: string) => void; error: (msg: string) => void }
-  | undefined;
+  chatHistories?: Map<string, HistoryEntry[]>;
+  logger?: {
+    warn: (msg: string) => void;
+    info: (msg: string) => void;
+    error: (msg: string) => void;
+  };
 };
+
+// Re-export for convenience
+export { buildAgentBody, checkBotMentioned, normalizeMessageToText, stripBotMention } from "./message-helpers.js";
+
+const CHANNEL_ID = "openclaw-extension-typex";
 
 export async function processTypeXMessage(
   client: TypeXClient,
@@ -20,118 +50,278 @@ export async function processTypeXMessage(
   appId: string,
   options: ProcessTypeXMessageOptions = {},
 ) {
-  // Use the full OpenClaw config for routing/bindings + dispatch.
-  // (typexCfg is only the channel-specific config.)
   const cfg = options.cfg;
   const accountId = options.accountId ?? appId;
   const logger = options.logger;
+  const typexCfg = options.typexCfg ?? {};
+  const chatHistories = options.chatHistories;
+
   const runtime = getTypeXRuntime();
   const channel = (runtime as Record<string, unknown>).channel as
     | {
-      reply?: {
-        dispatchReplyWithBufferedBlockDispatcher?: (opts: unknown) => Promise<unknown>;
-      };
-      routing?: {
-        resolveAgentRoute?: (input: unknown) => any;
-      };
-    }
+        reply?: {
+          dispatchReplyWithBufferedBlockDispatcher?: (opts: unknown) => Promise<unknown>;
+          resolveEnvelopeFormatOptions?: (cfg: unknown) => unknown;
+          formatAgentEnvelope?: (opts: { channel: string; from: string; timestamp: unknown; envelope: unknown; body: string }) => string;
+          finalizeInboundContext?: (ctx: unknown) => unknown;
+        };
+        routing?: { resolveAgentRoute?: (input: unknown) => any };
+        commands?: {
+          shouldComputeCommandAuthorized?: (body: string, cfg: unknown) => boolean;
+        };
+        pairing?: {
+          readAllowFromStore?: (opts: unknown) => Promise<string[]>;
+          upsertPairingRequest?: (opts: unknown) => Promise<{ code: string; created: boolean }>;
+          buildPairingReply?: (opts: unknown) => string;
+        };
+      }
     | undefined;
+
   if (!channel?.reply?.dispatchReplyWithBufferedBlockDispatcher) {
     logger?.error(`[typex:${accountId}] dispatchReplyWithBufferedBlockDispatcher not available`);
     return;
   }
 
-  if (!payload || !payload.chat_id) {
+  if (!payload?.chat_id) {
     logger?.warn("Received invalid event payload");
+    return;
+  }
+
+  if (!cfg) {
+    logger?.error(`[typex:${accountId}] missing full OpenClaw cfg`);
     return;
   }
 
   const chatId = payload.chat_id;
   const senderId = payload.sender_id;
-  // Use content as text for now. If content is JSON string, parse it.
-  let text = payload.content.text;
-  // Attempt simple parsing if it looks like JSON? For now assume plain text or handle in future.
+  const senderName = payload.sender_name ?? senderId;
+  const isGroup = payload.chat_type === "group";
+  const rawText = normalizeMessageToText(payload);
 
-  // Basic logging
-  logger?.info(`Processing TypeX message from ${senderId} in ${chatId}`);
+  logger?.info(`[typex:${accountId}] ${isGroup ? "group" : "DM"} message from ${senderId} in ${chatId}`);
 
-  // Build Context for Agent
-  const ctx = {
-    Body: text,
-    RawBody: text,
-    From: senderId,
-    To: chatId,
-    SenderId: senderId,
-    SenderName: payload.sender_name || "User",
-    ChatType: "dm", // Simplified, TypeX mostly DM for now?
-    Provider: "openclaw-extension-typex",
-    Surface: "openclaw-extension-typex",
-    Timestamp: payload.create_time || Date.now(),
-    MessageSid: payload.message_id,
-    AccountId: accountId,
-    OriginatingChannel: "openclaw-extension-typex",
-    OriginatingTo: chatId,
-  };
-
-  if (!cfg) {
-    logger?.error(`[typex:${accountId}] missing full OpenClaw cfg; cannot route/bind.`);
+  if (!rawText.trim()) {
+    logger?.info(`[typex:${accountId}] skipping empty/system message`);
     return;
   }
 
-  // Resolve agent route (bindings) and stamp SessionKey so the message runs in the right agent lane.
-  try {
-    const routing = channel.routing;
-    const route = routing?.resolveAgentRoute?.({
-      cfg,
-      channel: "openclaw-extension-typex",
-      accountId,
-      peer: { kind: "direct", id: String(chatId) },
-    });
-    if (route?.sessionKey) {
-      (ctx as any).SessionKey = route.sessionKey;
-      logger?.info(`[typex:${accountId}] resolved route: agentId=${route.agentId} matchedBy=${route.matchedBy} sessionKey=${route.sessionKey}`);
+  // ── Group access control ──────────────────────────────────────────────────
+  if (isGroup) {
+    const groupConfig = resolveGroupConfig(typexCfg, chatId);
+
+    if (groupConfig?.enabled === false) {
+      logger?.info(`[typex:${accountId}] group ${chatId} is disabled`);
+      return;
     }
-  } catch (e: any) {
-    logger?.error(`[typex:${accountId}] resolveAgentRoute failed: ${e?.message || String(e)}`);
+
+    const groupPolicy: string = typexCfg?.groupPolicy ?? "open";
+    const groupAllowFrom: Array<string | number> = typexCfg?.groupAllowFrom ?? [];
+
+    if (groupPolicy === "disabled") return;
+    if (groupPolicy === "allowlist" && !isAllowedBySenderId(groupAllowFrom, chatId)) {
+      logger?.info(`[typex:${accountId}] group ${chatId} not in groupAllowFrom`);
+      return;
+    }
+
+    const effectiveSenderAllowFrom: Array<string | number> =
+      groupConfig?.allowFrom ??
+      (typexCfg?.groupSenderAllowFrom as Array<string | number> | undefined) ??
+      [];
+    if (effectiveSenderAllowFrom.length > 0 && !isAllowedBySenderId(effectiveSenderAllowFrom, senderId)) {
+      logger?.info(`[typex:${accountId}] sender ${senderId} blocked by sender allowlist`);
+      return;
+    }
+
+    const requireMention: boolean = groupConfig?.requireMention ?? typexCfg?.requireMention ?? true;
+    const mentionedBot = checkBotMentioned(payload, appId);
+
+    if (requireMention && !mentionedBot) {
+      logger?.info(`[typex:${accountId}] no @mention — buffering to history`);
+      if (chatHistories) {
+        recordPendingHistoryEntryIfEnabled({
+          historyMap: chatHistories,
+          historyKey: chatId,
+          limit: typexCfg?.historyLimit ?? cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
+          entry: {
+            sender: senderId,
+            body: `${senderName}: ${rawText}`,
+            timestamp: typeof payload.create_time === "number" ? payload.create_time : Date.now(),
+            messageId: payload.message_id,
+          },
+        });
+      }
+      return;
+    }
   }
 
-  // Dispatch to Agent
+  // ── DM policy check ───────────────────────────────────────────────────────
+  if (!isGroup) {
+    const dmPolicy: string = typexCfg?.dmPolicy ?? "pairing";
+    const configAllowFrom: Array<string | number> = typexCfg?.allowFrom ?? [];
+
+    const storeAllowFrom =
+      dmPolicy === "allowlist"
+        ? []
+        : (await channel.pairing?.readAllowFromStore?.({ channel: CHANNEL_ID, accountId }).catch(() => [] as string[])) ?? [];
+
+    const effectiveDmAllowFrom = [...configAllowFrom.map(String), ...storeAllowFrom];
+    const dmAllowed = effectiveDmAllowFrom.some((e) => {
+      const norm = normalizeAllowEntry(e);
+      return norm === "*" || norm === normalizeAllowEntry(senderId);
+    });
+
+    if (dmPolicy !== "open" && !dmAllowed) {
+      if (dmPolicy === "pairing") {
+        const result = await channel.pairing?.upsertPairingRequest?.({
+          channel: CHANNEL_ID,
+          accountId,
+          id: senderId,
+          meta: { name: senderName !== senderId ? senderName : undefined },
+        });
+        if (result?.created) {
+          const replyText = channel.pairing?.buildPairingReply?.({
+            channel: CHANNEL_ID,
+            idLine: `Your TypeX user id: ${senderId}`,
+            code: result.code,
+          }) ?? `Pairing code: ${result.code}`;
+          await sendMessageTypeX(client, chatId, replyText, { msgType: TypeXMessageEnum.text });
+        }
+      } else {
+        logger?.info(`[typex:${accountId}] blocked sender ${senderId} (dmPolicy=${dmPolicy})`);
+      }
+      return;
+    }
+  }
+
+  // ── Fetch quoted/parent message ───────────────────────────────────────────
+  let quotedContent: string | undefined;
+  if (payload.parent_id) {
+    try {
+      const parentMsg = await client.getMessage(payload.parent_id);
+      if (parentMsg) quotedContent = normalizeMessageToText(parentMsg);
+    } catch { /* non-fatal */ }
+  }
+
+  // ── Normalise text ────────────────────────────────────────────────────────
+  const cleanText = checkBotMentioned(payload, appId)
+    ? stripBotMention(rawText, payload.mentions)
+    : rawText;
+
+  // ── Session routing ───────────────────────────────────────────────────────
+  const peerId = isGroup ? chatId : senderId;
+  let route: { sessionKey?: string; agentId?: string; accountId?: string } = {};
+  try {
+    route = channel.routing?.resolveAgentRoute?.({
+      cfg,
+      channel: CHANNEL_ID,
+      accountId,
+      peer: { kind: isGroup ? "group" : "direct", id: peerId },
+    }) ?? {};
+  } catch (e: any) {
+    logger?.error(`[typex:${accountId}] resolveAgentRoute failed: ${e?.message ?? String(e)}`);
+  }
+
+  // ── Build message body ────────────────────────────────────────────────────
+  const historyLimit: number =
+    typexCfg?.historyLimit ?? cfg?.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT;
+
+  const envelopeOptions = channel.reply?.resolveEnvelopeFormatOptions?.(cfg) ?? {};
+  const agentBody = buildAgentBody({
+    messageId: payload.message_id,
+    senderLabel: senderName,
+    content: cleanText,
+    quotedContent,
+  });
+
+  const envelopeFrom = isGroup ? `${chatId}:${senderId}` : senderId;
+  const formattedBody: string =
+    channel.reply?.formatAgentEnvelope?.({
+      channel: "TypeX",
+      from: envelopeFrom,
+      timestamp: new Date(typeof payload.create_time === "number" ? payload.create_time : Date.now()),
+      envelope: envelopeOptions,
+      body: agentBody,
+    }) ?? agentBody;
+
+  let combinedBody = formattedBody;
+  if (isGroup && chatHistories) {
+    combinedBody = buildPendingHistoryContextFromMap({
+      historyMap: chatHistories,
+      historyKey: chatId,
+      limit: historyLimit,
+      currentMessage: formattedBody,
+      formatEntry: (entry) =>
+        channel.reply?.formatAgentEnvelope?.({
+          channel: "TypeX",
+          from: `${chatId}:${entry.sender}`,
+          timestamp: entry.timestamp,
+          envelope: envelopeOptions,
+          body: entry.body,
+        }) ?? entry.body,
+    });
+  }
+
+  const inboundHistory =
+    isGroup && chatHistories && historyLimit > 0
+      ? (chatHistories.get(chatId) ?? []).map((e) => ({ sender: e.sender, body: e.body, timestamp: e.timestamp }))
+      : undefined;
+
+  const typexTo = isGroup ? `chat:${chatId}` : `user:${senderId}`;
+
+  const ctxPayload = channel.reply?.finalizeInboundContext?.({
+    Body: combinedBody,
+    BodyForAgent: agentBody,
+    InboundHistory: inboundHistory,
+    ReplyToId: payload.parent_id,
+    RootMessageId: payload.root_id,
+    RawBody: cleanText,
+    CommandBody: cleanText,
+    From: `typex:${senderId}`,
+    To: typexTo,
+    SessionKey: route.sessionKey,
+    AccountId: route.accountId ?? accountId,
+    ChatType: isGroup ? "group" : "direct",
+    GroupSubject: isGroup ? chatId : undefined,
+    SenderName: senderName,
+    SenderId: senderId,
+    Provider: CHANNEL_ID,
+    Surface: CHANNEL_ID,
+    MessageSid: payload.message_id,
+    ReplyToBody: quotedContent,
+    Timestamp: typeof payload.create_time === "number" ? payload.create_time : Date.now(),
+    WasMentioned: checkBotMentioned(payload, appId),
+    OriginatingChannel: CHANNEL_ID,
+    OriginatingTo: typexTo,
+  });
+
+  logger?.info(`[typex:${accountId}] dispatching (session=${route.sessionKey ?? "default"})`);
+
+  // ── Dispatch to agent ─────────────────────────────────────────────────────
   await channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-    ctx,
+    ctx: ctxPayload,
     cfg,
     dispatcherOptions: {
-      channel: "openclaw-extension-typex",
+      channel: CHANNEL_ID,
       accountId,
-      deliver: async (payload: unknown) => {
-        const responsePayload = payload as {
-          text?: string;
-          mediaUrls?: string[];
-          mediaUrl?: string;
-        };
-        // Handle text response
-        if (responsePayload.text) {
-          await sendMessageTypeX(client, responsePayload.text, { msgType: TypeXMessageEnum.richText });
+      deliver: async (responsePayload: unknown) => {
+        const rp = responsePayload as { text?: string; mediaUrls?: string[]; mediaUrl?: string };
+        if (rp.text) {
+          await sendMessageTypeX(client, chatId, rp.text, { msgType: TypeXMessageEnum.richText });
         }
-
-        // Handle media if present in response
-        const mediaUrls = responsePayload.mediaUrls?.length
-          ? responsePayload.mediaUrls
-          : responsePayload.mediaUrl
-            ? [responsePayload.mediaUrl]
-            : [];
-
-        for (const mediaUrl of mediaUrls) {
-          await sendMessageTypeX(client, {}, { mediaUrl, msgType: TypeXMessageEnum.richText });
+        const urls = rp.mediaUrls?.length ? rp.mediaUrls : rp.mediaUrl ? [rp.mediaUrl] : [];
+        for (const url of urls) {
+          await sendMessageTypeX(client, chatId, {}, { mediaUrl: url, msgType: TypeXMessageEnum.richText });
         }
       },
       onError: (err: Error) => {
-        logger?.error(`Reply dispatch error: ${err.message}`);
+        logger?.error(`[typex:${accountId}] reply error: ${err.message}`);
       },
     },
-    replyOptions: {
-      disableBlockStreaming: true,
-      // Do not use embedded agent; let gateway bindings decide the agent.
-      embedded: false,
-    },
+    replyOptions: { disableBlockStreaming: true, embedded: false },
   });
+
+  // ── Clear group history after dispatch ────────────────────────────────────
+  if (isGroup && chatHistories) {
+    clearHistoryEntriesIfEnabled({ historyMap: chatHistories, historyKey: chatId, limit: historyLimit });
+  }
 }

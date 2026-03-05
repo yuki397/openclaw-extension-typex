@@ -1,9 +1,9 @@
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
+import type { HistoryEntry, OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk";
 import { getTypeXClient } from "./client.js";
 import { processTypeXMessage } from "./message.js";
-import type { RuntimeEnv, OpenClawConfig } from "openclaw/plugin-sdk";
 
 export type MonitorTypeXOpts = {
   account: unknown; // ResolvedTypeXAccount + extras from gateway
@@ -79,11 +79,11 @@ export async function monitorTypeXProvider(opts: MonitorTypeXOpts) {
   try {
     const { account, runtime, abortSignal, log, typexCfg, cfg } = opts;
     const accountObj = account as {
-      config: { token?: string; appId?: string };
+      config: { token?: string; appId?: string; mode?: "user" | "bot" };
       accountId: string;
       name?: string;
     };
-    const { token, appId } = accountObj.config;
+    const { token, appId, mode } = accountObj.config;
     // log is unknown, cast for usage
     const logger = log as
       | { warn: (msg: string) => void; info: (msg: string) => void; error: (msg: string) => void }
@@ -95,14 +95,15 @@ export async function monitorTypeXProvider(opts: MonitorTypeXOpts) {
     }
 
     // Initialize Client
-    const client = getTypeXClient(undefined, { token, skipConfigCheck: true });
+    const client = getTypeXClient(undefined, { token, mode: mode ?? "user", skipConfigCheck: true });
 
-    logger?.info(
-      `[${accountObj.accountId}] Starting TypeX monitor for ${accountObj.accountId}...`,
-    );
+    logger?.info(`[${accountObj.accountId}] Starting TypeX monitor (mode=${mode ?? "user"})...`);
 
     let currentPos = await readPos(accountObj.accountId);
     logger?.info(`[${accountObj.accountId}] Loaded pos: ${currentPos}`);
+
+    // Group history buffer: lives for the entire monitor lifetime.
+    const chatHistories = new Map<string, HistoryEntry[]>();
 
     // --- Polling Loop ---
     while (!abortSignal.aborted) {
@@ -114,10 +115,10 @@ export async function monitorTypeXProvider(opts: MonitorTypeXOpts) {
             // Dispatch to OpenClaw via processTypeXMessage
             await processTypeXMessage(client, msg, appId || accountObj.accountId, {
               accountId: accountObj.accountId,
-              // Pass the full OpenClaw config so routing/bindings work.
               cfg,
               typexCfg,
               botName: accountObj.name,
+              chatHistories,
               logger
             });
 

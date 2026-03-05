@@ -1,6 +1,4 @@
 import type { TypeXClient } from "./client.js";
-import { formatErrorMessage } from "openclaw/plugin-sdk";
-// import { loadWebMedia } from "../web/media.js";
 import { TypeXMessageEnum } from "./types.js";
 
 export type TypeXSendOpts = {
@@ -9,19 +7,20 @@ export type TypeXSendOpts = {
   maxBytes?: number;
 };
 
+/**
+ * Send a message via the TypeX client to a specific chat.
+ * @param client  TypeX client instance
+ * @param chatId  Destination chat_id (group or DM)
+ * @param content Message text or content object
+ * @param opts    Additional send options
+ */
 export async function sendMessageTypeX(
   client: TypeXClient,
+  chatId: string,
   content: string | { text?: string },
   opts: TypeXSendOpts = {},
 ) {
-  let msgType = opts.msgType || TypeXMessageEnum.text;
-  let finalContent: string | object = content;
-
-  // Send the main message
-  try {
-    const res = await client.sendMessage(finalContent, msgType);
-    return res;
-  } catch (err) {
-    throw err;
-  }
+  const msgType = opts.msgType ?? TypeXMessageEnum.text;
+  const res = await client.sendMessage(chatId, content, msgType);
+  return res;
 }

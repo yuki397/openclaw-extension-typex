@@ -21,7 +21,7 @@ export const typexPlugin = {
   meta,
   onboarding: typexOnboardingAdapter,
   capabilities: {
-    chatTypes: ["direct"],
+    chatTypes: ["direct", "group"],
     media: true,
     reactions: false,
     threads: false,
@@ -128,7 +128,12 @@ export const typexPlugin = {
   },
 
   groups: {
-    resolveRequireMention: () => false,
+    resolveRequireMention: ({ cfg, groupId }) => {
+      const typexCfg = cfg.channels?.["openclaw-extension-typex"] as Record<string, any> | undefined;
+      const groups = typexCfg?.groups ?? {};
+      const groupCfg = (groups[groupId ?? ""] ?? groups["*"]) as { requireMention?: boolean } | undefined;
+      return groupCfg?.requireMention ?? typexCfg?.requireMention ?? true;
+    },
   },
 
   directory: {
