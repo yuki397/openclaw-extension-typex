@@ -12,29 +12,28 @@ import { TypeXMessageEnum, type TypeXMessageEntry, type TypeXMention } from "./t
 // ---------------------------------------------------------------------------
 
 export function normalizeMessageToText(msg: TypeXMessageEntry): string {
-  const type = String(msg.msg_type ?? "");
+  const typeNum = Number(msg.msg_type);
 
-  if (type === "0" || type === String(TypeXMessageEnum.text) || type === "text") {
-    return msg.content.text ?? "";
-  }
-  if (type === "8" || type === String(TypeXMessageEnum.richText) || type === "richtext") {
-    return msg.content.text ?? "";
-  }
+  switch (typeNum) {
+    case TypeXMessageEnum.text:
+    case TypeXMessageEnum.richText:
+      return msg.content.text ?? "";
 
-  switch (type) {
-    case "image":
+    case TypeXMessageEnum.image:
+    case TypeXMessageEnum.photoCollageMsg:
       return "<media:image>";
-    case "file":
+
+    case TypeXMessageEnum.file:
+    case TypeXMessageEnum.fileGroup:
       return msg.content.file_name ? `<media:file:${msg.content.file_name}>` : "<media:file>";
-    case "audio":
-      return "<media:audio>";
-    case "video":
-    case "media":
+
+    case TypeXMessageEnum.video:
       return "<media:video>";
-    case "sticker":
+
+    case TypeXMessageEnum.emoji:
       return "<media:sticker>";
 
-    case "card": {
+    case TypeXMessageEnum.newCard: {
       const card = msg.content.card;
       if (!card) return "[Card message]";
       try {
@@ -50,14 +49,14 @@ export function normalizeMessageToText(msg: TypeXMessageEntry): string {
       }
     }
 
-    case "merge_forward": {
+    case TypeXMessageEnum.forward: {
       const items = msg.content.items ?? [];
       if (items.length === 0) return "[Merged and Forwarded Messages]";
       const lines = ["[Merged and Forwarded Messages]"];
       const limit = Math.min(items.length, 50);
       for (let i = 0; i < limit; i++) {
         const item = items[i];
-        const itemText = item.content?.text?.trim() ?? `[${item.msg_type ?? "unknown"}]`;
+        const itemText = item.content?.text?.trim() ?? `[type: ${item.msg_type ?? "unknown"}]`;
         const sender = item.sender?.name ?? item.sender?.id ?? "unknown";
         lines.push(`- ${sender}: ${itemText}`);
       }
@@ -65,11 +64,13 @@ export function normalizeMessageToText(msg: TypeXMessageEntry): string {
       return lines.join("\n");
     }
 
-    case "system":
-      return "";
+    case TypeXMessageEnum.mentioned:
+    case TypeXMessageEnum.custom:
+    case TypeXMessageEnum.via:
+      return msg.content.text ?? `[Message type: ${typeNum}]`;
 
     default:
-      return `[Unsupported message type: ${type}]`;
+      return `[Unsupported message type: ${msg.msg_type}]`;
   }
 }
 

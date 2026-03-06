@@ -212,6 +212,28 @@ export async function processTypeXMessage(
     } catch { /* non-fatal */ }
   }
 
+  // ── Fetch image/file attachments ──────────────────────────────────────────
+  const attachments: { "content-type": string; size: number; payload: string }[] = [];
+  const typeNum = Number(payload.msg_type);
+  if ([TypeXMessageEnum.image, TypeXMessageEnum.photoCollageMsg, TypeXMessageEnum.file, TypeXMessageEnum.fileGroup].includes(typeNum)) {
+    const objectKey = payload.content.image_key || payload.content.file_key;
+    if (objectKey) {
+      if (client.mode === "bot") {
+        logger?.info(`[typex:${accountId}] fetching attachment objectKey=${objectKey}`);
+        const fileData = await client.fetchFileBuffer(objectKey);
+        if (fileData) {
+          attachments.push({
+            "content-type": fileData.mimeType,
+            size: fileData.buffer.length,
+            payload: fileData.buffer.toString("base64"),
+          });
+        }
+      } else {
+        logger?.info(`[typex:${accountId}] skipping attachment fetch because mode is not bot`);
+      }
+    }
+  }
+
   // ── Normalise text ────────────────────────────────────────────────────────
   const cleanText = checkBotMentioned(payload, appId)
     ? stripBotMention(rawText, payload.mentions)
@@ -302,6 +324,7 @@ export async function processTypeXMessage(
     WasMentioned: checkBotMentioned(payload, appId),
     OriginatingChannel: CHANNEL_ID,
     OriginatingTo: typexTo,
+    Attachments: attachments.length > 0 ? attachments : undefined,
   });
 
   logger?.info(`[typex:${accountId}] dispatching (session=${route.sessionKey ?? "default"})`);

@@ -2,7 +2,18 @@ import { OpenClawConfig, WizardPrompter } from "openclaw/plugin-sdk";
 
 export enum TypeXMessageEnum {
   text = 0,
+  image = 1,
+  video = 4,
+  file = 5,
+  forward = 6,
+  emoji = 7,
   richText = 8,
+  via = 9,
+  photoCollageMsg = 11,
+  mentioned = 12,
+  custom = 13,
+  fileGroup = 15,
+  newCard = 16,
 }
 
 export type TypeXMessage = {

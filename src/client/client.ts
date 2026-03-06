@@ -106,7 +106,6 @@ export class TypeXClient {
    * Fetch messages. Dispatches to user or bot endpoint based on mode.
    */
   async fetchMessages(pos: number): Promise<TypeXMessageEntry[]> {
-    console.log('mode: ', this.mode);
     return this.mode === "bot"
       ? this.fetchBotMessages(pos)
       : this.fetchUserMessages(pos);
@@ -167,6 +166,35 @@ export class TypeXClient {
       const resJson = await response.json();
       return resJson.code === 0 && resJson.data ? resJson.data : null;
     } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Fetch file binary stream from TypeX using object_key.
+   * Requires Bot Token authentication.
+   */
+  async fetchFileBuffer(objectKey: string, size?: string): Promise<{ buffer: Buffer; mimeType: string } | null> {
+    if (!this.accessToken || this.mode !== "bot") return null;
+    try {
+      const query = new URLSearchParams({ object_key: objectKey });
+      if (size) query.append("size", size);
+      const url = `${TYPEX_DOMAIN}/open/robot/file?${query.toString()}`;
+
+      const response = await fetch(url, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${this.accessToken}` },
+      });
+
+      if (!response.ok) return null;
+
+      const arrayBuffer = await response.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+      const mimeType = response.headers.get("content-type") ?? "application/octet-stream";
+
+      return { buffer, mimeType };
+    } catch (e) {
+      console.log(`fetchFileBuffer error: ${e}`);
       return null;
     }
   }
