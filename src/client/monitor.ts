@@ -189,72 +189,68 @@ async function savePos(accountId: string, pos: number): Promise<void> {
 }
 
 export async function monitorTypeXProvider(opts: MonitorTypeXOpts) {
-  try {
-    const { account, runtime, abortSignal, log, typexCfg, cfg } = opts;
-    const accountObj = account as {
-      config: { token?: string; appId?: string; mode?: "user" | "bot" };
-      accountId: string;
-      name?: string;
-    };
-    const { token, appId, mode } = accountObj.config;
-    // log is unknown, cast for usage
-    const logger = log as
-      | { warn: (msg: string) => void; info: (msg: string) => void; error: (msg: string) => void }
-      | undefined;
+  const { account, runtime, abortSignal, log, typexCfg, cfg } = opts;
+  const accountObj = account as {
+    config: { token?: string; appId?: string; mode?: "user" | "bot" };
+    accountId: string;
+    name?: string;
+  };
+  const { token, appId, mode } = accountObj.config;
+  // log is unknown, cast for usage
+  const logger = log as
+    | { warn: (msg: string) => void; info: (msg: string) => void; error: (msg: string) => void }
+    | undefined;
 
-    if (!token) {
-      logger?.warn(`[${accountObj.accountId}] No token found. Stopping monitor.`);
-      return;
-    }
+  if (!token) {
+    logger?.warn(`[${accountObj.accountId}] No token found. Stopping monitor.`);
+    return;
+  }
 
-    // Initialize Client
-    const client = getTypeXClient(undefined, { token, mode: mode ?? "user", skipConfigCheck: true });
+  // Initialize Client
+  const client = getTypeXClient(undefined, { token, mode: mode ?? "user", skipConfigCheck: true });
 
-    logger?.info(`[${accountObj.accountId}] Starting TypeX monitor (mode=${mode ?? "user"})...`);
+  logger?.info(`[${accountObj.accountId}] Starting TypeX monitor (mode=${mode ?? "user"})...`);
 
-    let currentPos = await readPos(accountObj.accountId);
-    logger?.info(`[${accountObj.accountId}] Loaded pos: ${currentPos}`);
+  let currentPos = await readPos(accountObj.accountId);
+  logger?.info(`[${accountObj.accountId}] Loaded pos: ${currentPos}`);
 
-    // Group history buffer: lives for the entire monitor lifetime.
-    const chatHistories = new Map<string, HistoryEntry[]>();
+  // Group history buffer: lives for the entire monitor lifetime.
+  const chatHistories = new Map<string, HistoryEntry[]>();
 
-    // --- Polling Loop ---
-    while (!abortSignal.aborted) {
-      try {
-        const messages = await client.fetchMessages(currentPos);
-        console.log('messages', messages);
+  // --- Polling Loop ---
+  while (!abortSignal.aborted) {
+    try {
+      const messages = await client.fetchMessages(currentPos);
+      console.log('messages', messages);
 
-        if (messages && messages.length > 0) {
-          for (const msg of messages) {
-            // Dispatch to OpenClaw via processTypeXMessage
-            await processTypeXMessage(client, msg, appId || accountObj.accountId, {
-              accountId: accountObj.accountId,
-              cfg,
-              typexCfg,
-              botName: accountObj.name,
-              chatHistories,
-              logger
-            });
+      if (messages && messages.length > 0) {
+        for (const msg of messages) {
+          // Dispatch to OpenClaw via processTypeXMessage
+          await processTypeXMessage(client, msg, appId || accountObj.accountId, {
+            accountId: accountObj.accountId,
+            cfg,
+            typexCfg,
+            botName: accountObj.name,
+            chatHistories,
+            logger
+          });
 
-            if (typeof msg.position === "number") {
-              currentPos = msg.position;
-              await savePos(accountObj.accountId, currentPos);
-            }
+          if (typeof msg.position === "number") {
+            currentPos = msg.position;
+            await savePos(accountObj.accountId, currentPos);
           }
         }
-      } catch (err) {
-        logger?.error(
-          `Error in TypeX polling loop: ${err instanceof Error ? err.stack : String(err)}`,
-        );
       }
-
-      if (abortSignal.aborted) {
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 3000));
+    } catch (err) {
+      logger?.error(
+        `Error in TypeX polling loop: ${err instanceof Error ? err.stack : String(err)}`,
+      );
     }
-    logger?.info(`Stopping TypeX monitor...`);
-  } catch (e) {
-    throw e;
+
+    if (abortSignal.aborted) {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 3000));
   }
+  logger?.info(`Stopping TypeX monitor...`);
 }
