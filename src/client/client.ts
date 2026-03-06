@@ -83,23 +83,90 @@ export class TypeXClient {
     else console.log(`TypeXClient sending to ${to}: ${String(finalContent).slice(0, 80)}`);
 
     const isBot = this.mode === "bot";
-    const response = await fetch(`${TYPEX_DOMAIN}/open/claw/send_message`, {
+    const endpoint = isBot ? "/open/robot/send_message" : "/open/claw/send_message";
+
+    let payloadStr: string;
+    if (isBot) {
+      // For text messages (type 0), content might be a string.
+      // For media (image/file), content is an object (constructed in sendMessageTypeX)
+      let botContentStr: string;
+      if (msgType === 0) {
+        botContentStr = typeof content === "string" ? JSON.stringify({ text: content })
+          : (typeof finalContent === "string" ? finalContent : JSON.stringify(content));
+      } else {
+        // Image or File object payload for bot
+        botContentStr = typeof finalContent === "string" ? finalContent : JSON.stringify(content);
+      }
+
+      payloadStr = JSON.stringify({
+        chat_id: to,
+        content: botContentStr,
+        msg_type: msgType,
+      });
+    } else {
+      payloadStr = JSON.stringify({
+        chat_id: to,
+        content: { text: finalContent },
+        msg_type: msgType,
+      });
+    }
+
+    const response = await fetch(`${TYPEX_DOMAIN}${endpoint}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         ...(isBot ? { Authorization: `Bearer ${token}` } : { Cookie: token }),
       },
-      body: JSON.stringify({
-        chat_id: to,
-        content: { text: finalContent },
-        msg_type: msgType,
-      }),
+      body: payloadStr,
     });
     const resJson = await response.json();
     if (resJson.code !== 0) {
-      throw new Error(`Send message failed: [${resJson.code}] ${resJson.message}`);
+      throw new Error(`Send message failed: [${resJson.code}] ${resJson.msg || resJson.message}`);
     }
     return resJson.data || { message_id: `msg_${Date.now()}` };
+  }
+
+  /**
+   * Upload resource for the robot to send.
+   * @param fileName Name of the file
+   * @param fileType "image" | "audio" | "video" | "application"
+   * @param fileContent Buffer or Blob containing the file data
+   * @param chatId Optional chat_id
+   */
+  async uploadResource(
+    fileName: string,
+    fileType: "image" | "audio" | "video" | "application",
+    fileContent: Buffer | Blob,
+    chatId?: string
+  ) {
+    if (this.mode !== "bot" || !this.accessToken) {
+      throw new Error("TypeXClient: uploadResource requires bot mode and an access token.");
+    }
+
+    const formData = new FormData();
+    if (chatId) formData.append("chat_id", chatId);
+    formData.append("file_name", fileName);
+    formData.append("file_type", fileType);
+
+    // Node.js fetch implementation of FormData requires a Blob-like object for files.
+    // By providing a Blob we ensure it correctly adds boundaries and content types per form part.
+    const blob = fileContent instanceof Buffer ? new Blob([fileContent as unknown as BlobPart]) : fileContent;
+    formData.append("file_content", blob as Blob, fileName);
+
+    const response = await fetch(`${TYPEX_DOMAIN}/open/robot/upload`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.accessToken}`,
+        // Note: fetch will automatically set the Content-Type boundary
+      },
+      body: formData,
+    });
+
+    const resJson = await response.json();
+    if (resJson.code !== 0) {
+      throw new Error(`Upload resource failed: [${resJson.code}] ${resJson.msg || resJson.message}`);
+    }
+    return resJson.data;
   }
 
   /**
