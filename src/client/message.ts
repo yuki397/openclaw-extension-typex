@@ -59,22 +59,22 @@ export async function processTypeXMessage(
   const runtime = getTypeXRuntime();
   const channel = (runtime as Record<string, unknown>).channel as
     | {
-        reply?: {
-          dispatchReplyWithBufferedBlockDispatcher?: (opts: unknown) => Promise<unknown>;
-          resolveEnvelopeFormatOptions?: (cfg: unknown) => unknown;
-          formatAgentEnvelope?: (opts: { channel: string; from: string; timestamp: unknown; envelope: unknown; body: string }) => string;
-          finalizeInboundContext?: (ctx: unknown) => unknown;
-        };
-        routing?: { resolveAgentRoute?: (input: unknown) => any };
-        commands?: {
-          shouldComputeCommandAuthorized?: (body: string, cfg: unknown) => boolean;
-        };
-        pairing?: {
-          readAllowFromStore?: (opts: unknown) => Promise<string[]>;
-          upsertPairingRequest?: (opts: unknown) => Promise<{ code: string; created: boolean }>;
-          buildPairingReply?: (opts: unknown) => string;
-        };
-      }
+      reply?: {
+        dispatchReplyWithBufferedBlockDispatcher?: (opts: unknown) => Promise<unknown>;
+        resolveEnvelopeFormatOptions?: (cfg: unknown) => unknown;
+        formatAgentEnvelope?: (opts: { channel: string; from: string; timestamp: unknown; envelope: unknown; body: string }) => string;
+        finalizeInboundContext?: (ctx: unknown) => unknown;
+      };
+      routing?: { resolveAgentRoute?: (input: unknown) => any };
+      commands?: {
+        shouldComputeCommandAuthorized?: (body: string, cfg: unknown) => boolean;
+      };
+      pairing?: {
+        readAllowFromStore?: (opts: unknown) => Promise<string[]>;
+        upsertPairingRequest?: (opts: unknown) => Promise<{ code: string; created: boolean }>;
+        buildPairingReply?: (opts: unknown) => string;
+      };
+    }
     | undefined;
 
   if (!channel?.reply?.dispatchReplyWithBufferedBlockDispatcher) {
@@ -165,11 +165,20 @@ export async function processTypeXMessage(
         : (await channel.pairing?.readAllowFromStore?.({ channel: CHANNEL_ID, accountId }).catch(() => [] as string[])) ?? [];
 
     const effectiveDmAllowFrom = [...configAllowFrom.map(String), ...storeAllowFrom];
-    const dmAllowed = effectiveDmAllowFrom.some((e) => {
-      const norm = normalizeAllowEntry(e);
-      return norm === "*" || norm === normalizeAllowEntry(senderId);
-    });
+    const dmAllowed =
+      senderId === accountId ||
+      effectiveDmAllowFrom.some((e) => {
+        const norm = normalizeAllowEntry(e);
+        return norm === "*" || norm === normalizeAllowEntry(senderId);
+      });
 
+    console.table({
+      dmPolicy,
+      configAllowFrom,
+      storeAllowFrom,
+      effectiveDmAllowFrom,
+      dmAllowed,
+    });
     if (dmPolicy !== "open" && !dmAllowed) {
       if (dmPolicy === "pairing") {
         const result = await channel.pairing?.upsertPairingRequest?.({
@@ -178,7 +187,8 @@ export async function processTypeXMessage(
           id: senderId,
           meta: { name: senderName !== senderId ? senderName : undefined },
         });
-        if (result?.created) {
+        console.log('result', result);
+        if (result) {
           const replyText = channel.pairing?.buildPairingReply?.({
             channel: CHANNEL_ID,
             idLine: `Your TypeX user id: ${senderId}`,

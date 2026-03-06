@@ -4,6 +4,7 @@ import * as path from "path";
 import type { HistoryEntry, OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk";
 import { getTypeXClient } from "./client.js";
 import { processTypeXMessage } from "./message.js";
+import { getTypeXRuntime } from "./runtime.js";
 
 export type MonitorTypeXOpts = {
   account: unknown; // ResolvedTypeXAccount + extras from gateway
@@ -15,61 +16,173 @@ export type MonitorTypeXOpts = {
   cfg: OpenClawConfig;
 };
 
-const OPENCLAW_CONFIG_PATH =
-  process.env.OPENCLAW_CONFIG_PATH ||
-  path.join(os.homedir(), ".openclaw", "openclaw.json");
+type TypeXPosState = {
+  version: 1;
+  lastPos: number;
+  accountId: string;
+};
 
-/** Read pos from openclaw.json: channels.openclaw-extension-typex.accounts.<accountId>.pos */
-async function readPos(accountId: string): Promise<number> {
+const POS_STORE_VERSION = 1;
+
+const OPENCLAW_CONFIG_PATH =
+  process.env.OPENCLAW_CONFIG_PATH || path.join(os.homedir(), ".openclaw", "openclaw.json");
+
+function normalizeAccountIdForFile(accountId: string): string {
+  return (accountId || "default").replace(/[^a-z0-9._-]+/gi, "_");
+}
+
+function resolveTypeXPosStatePath(accountId: string): string {
+  const stateDir = getTypeXRuntime().state.resolveStateDir(process.env, os.homedir);
+  const normalized = normalizeAccountIdForFile(accountId);
+  return path.join(stateDir, "typex", `update-pos-${normalized}.json`);
+}
+
+async function writeJsonFileAtomically(filePath: string, data: unknown): Promise<void> {
+  const tempPath = `${filePath}.tmp.${Date.now()}`;
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(tempPath, JSON.stringify(data), "utf-8");
+  await fs.rename(tempPath, filePath);
+}
+
+function parseTypeXPosState(raw: string): TypeXPosState | null {
+  try {
+    const parsed = JSON.parse(raw) as Partial<TypeXPosState>;
+    if (parsed.version !== POS_STORE_VERSION) {
+      return null;
+    }
+    if (
+      typeof parsed.lastPos !== "number" ||
+      !Number.isFinite(parsed.lastPos) ||
+      parsed.lastPos < 0
+    ) {
+      return null;
+    }
+    if (typeof parsed.accountId !== "string" || !parsed.accountId.trim()) {
+      return null;
+    }
+    return {
+      version: POS_STORE_VERSION,
+      lastPos: parsed.lastPos,
+      accountId: parsed.accountId,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function readPosFromState(accountId: string): Promise<number | null> {
+  const filePath = resolveTypeXPosStatePath(accountId);
+  try {
+    const raw = await fs.readFile(filePath, "utf-8");
+    const parsed = parseTypeXPosState(raw);
+    if (!parsed) {
+      return null;
+    }
+    // Guard against accidental account file reuse.
+    if (parsed.accountId !== accountId) {
+      return null;
+    }
+    return parsed.lastPos;
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    if (code === "ENOENT") {
+      return null;
+    }
+    return null;
+  }
+}
+
+async function writePosToState(accountId: string, pos: number): Promise<void> {
+  const filePath = resolveTypeXPosStatePath(accountId);
+  const payload: TypeXPosState = {
+    version: POS_STORE_VERSION,
+    lastPos: pos,
+    accountId,
+  };
+  await writeJsonFileAtomically(filePath, payload);
+}
+
+async function readPosFromConfig(params: {
+  accountId: string;
+  channelKey: "typex" | "openclaw-extension-typex";
+}): Promise<number | null> {
   try {
     const raw = await fs.readFile(OPENCLAW_CONFIG_PATH, "utf-8");
     const cfg = JSON.parse(raw);
-    const pos = cfg?.channels?.["openclaw-extension-typex"]?.accounts?.[accountId]?.pos;
-    if (typeof pos === "number") return pos;
+    const pos = cfg?.channels?.[params.channelKey]?.accounts?.[params.accountId]?.pos;
+    if (typeof pos === "number" && Number.isFinite(pos) && pos >= 0) {
+      return pos;
+    }
   } catch {
-    // ignore — will fall through to migration
+    // ignore
   }
+  return null;
+}
 
-  // Migrate from legacy state file locations (pre-openclaw.json storage).
-  // Priority (highest first):
-  //   v1 (oldest): /tmp/typex/.typex_pos_<safeId>.json  — flat-file format
-  //   v2:          /tmp/typex/<accountId>/.typex_pos.json — accountId-subdir format
-  // If v1 exists it takes precedence; v2 is only used when v1 is absent.
-  const safeId = (accountId || "default").replace(/[^a-z0-9]/gi, "_");
+async function readLegacyPosFile(accountId: string): Promise<number | null> {
+  // Legacy state file locations (pre-state-dir storage):
+  //   v1 (oldest): /tmp/typex/.typex_pos_<safeId>.json
+  //   v2:          /tmp/typex/<accountId>/.typex_pos.json
+  const safeId = normalizeAccountIdForFile(accountId);
   const legacyCandidates = [
-    path.join("/tmp", "typex", `.typex_pos_${safeId}.json`),          // v1 (oldest)
-    path.join("/tmp", "typex", accountId, ".typex_pos.json"),          // v2
+    path.join("/tmp", "typex", `.typex_pos_${safeId}.json`),
+    path.join("/tmp", "typex", accountId, ".typex_pos.json"),
   ];
 
   for (const candidate of legacyCandidates) {
     try {
       const data = await fs.readFile(candidate, "utf-8");
-      const json = JSON.parse(data);
-      if (typeof json.pos === "number") {
-        // Persist to openclaw.json and remove legacy file.
-        await savePos(accountId, json.pos);
-        await fs.unlink(candidate).catch(() => { });
+      const json = JSON.parse(data) as { pos?: unknown };
+      if (typeof json.pos === "number" && Number.isFinite(json.pos) && json.pos >= 0) {
+        await fs.unlink(candidate).catch(() => {
+          // best effort cleanup
+        });
         return json.pos;
       }
     } catch {
-      /* try next */
+      // try next candidate
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Read TypeX stream position.
+ * Priority:
+ * 1) state dir (new)
+ * 2) channels.typex.accounts.<id>.pos (legacy in-config)
+ * 3) channels.openclaw-extension-typex.accounts.<id>.pos (old plugin id)
+ * 4) /tmp/typex legacy files
+ */
+async function readPos(accountId: string): Promise<number> {
+  const statePos = await readPosFromState(accountId);
+  if (typeof statePos === "number") {
+    return statePos;
+  }
+
+  const migrationCandidates: Array<() => Promise<number | null>> = [
+    () => readPosFromConfig({ accountId, channelKey: "typex" }),
+    () => readPosFromConfig({ accountId, channelKey: "openclaw-extension-typex" }),
+    () => readLegacyPosFile(accountId),
+  ];
+
+  for (const candidate of migrationCandidates) {
+    const pos = await candidate();
+    if (typeof pos === "number") {
+      await writePosToState(accountId, pos).catch(() => {
+        // non-fatal; fallback to using runtime pos only
+      });
+      return pos;
     }
   }
 
   return 0;
 }
 
-/** Write pos back into openclaw.json under the account config. */
 async function savePos(accountId: string, pos: number): Promise<void> {
   try {
-    const raw = await fs.readFile(OPENCLAW_CONFIG_PATH, "utf-8");
-    const cfg = JSON.parse(raw);
-    cfg.channels ??= {};
-    cfg.channels["openclaw-extension-typex"] ??= {};
-    cfg.channels["openclaw-extension-typex"].accounts ??= {};
-    cfg.channels["openclaw-extension-typex"].accounts[accountId] ??= {};
-    cfg.channels["openclaw-extension-typex"].accounts[accountId].pos = pos;
-    await fs.writeFile(OPENCLAW_CONFIG_PATH, JSON.stringify(cfg, null, 4));
+    await writePosToState(accountId, pos);
   } catch {
     // Non-fatal: losing pos means re-processing a few messages at worst.
   }
@@ -109,6 +222,7 @@ export async function monitorTypeXProvider(opts: MonitorTypeXOpts) {
     while (!abortSignal.aborted) {
       try {
         const messages = await client.fetchMessages(currentPos);
+        console.log('messages', messages);
 
         if (messages && messages.length > 0) {
           for (const msg of messages) {

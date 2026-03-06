@@ -106,6 +106,7 @@ export class TypeXClient {
    * Fetch messages. Dispatches to user or bot endpoint based on mode.
    */
   async fetchMessages(pos: number): Promise<TypeXMessageEntry[]> {
+    console.log('mode: ', this.mode);
     return this.mode === "bot"
       ? this.fetchBotMessages(pos)
       : this.fetchUserMessages(pos);
