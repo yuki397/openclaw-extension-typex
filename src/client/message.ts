@@ -211,7 +211,6 @@ export async function processTypeXMessage(
   const typeNum = Number(payload.msg_type);
   if ([TypeXMessageEnum.image, TypeXMessageEnum.photoCollageMsg, TypeXMessageEnum.file, TypeXMessageEnum.fileGroup].includes(typeNum)) {
     const parsedContent: any = typeof payload.content === "string" ? JSON.parse(payload.content) : payload.content;
-    console.log('parsedContent', parsedContent);
     const objectKeys = new Set<string>();
 
     const extractKey = (urlStr?: string) => {
@@ -275,7 +274,7 @@ export async function processTypeXMessage(
                   objectKey,
                   mimeType: fileData.mimeType,
                 });
-              } catch {}
+              } catch { }
             }
 
             attachments.push({
@@ -406,11 +405,35 @@ export async function processTypeXMessage(
       accountId,
       deliver: async (responsePayload: unknown) => {
         const rp = responsePayload as { text?: string; mediaUrls?: string[]; mediaUrl?: string };
-        if (rp.text) {
-          await sendMessageTypeX(client, chatId, rp.text, { msgType: TypeXMessageEnum.richText });
+
+        // Allow a simple escape hatch for sending local/remote media even when
+        // the upstream agent interface can't emit structured mediaUrls.
+        // If the agent includes lines like:
+        //   [[typex_send_media:/abs/path/to.png]]
+        //   [[typex_send_media:https://example.com/a.jpg]]
+        // we will upload+send that media and strip the directive from the text.
+        const extractedFromText: string[] = [];
+        let text = rp.text;
+        if (text) {
+          const re = /\[\[typex_send_media:([^\]]+)\]\]/g;
+          text = text.replace(re, (_m, p1) => {
+            const v = String(p1 ?? "").trim();
+            if (v) extractedFromText.push(v);
+            return "";
+          }).trim();
         }
-        const urls = rp.mediaUrls?.length ? rp.mediaUrls : rp.mediaUrl ? [rp.mediaUrl] : [];
-        for (const url of urls) {
+
+        if (text) {
+          await sendMessageTypeX(client, chatId, text, { msgType: TypeXMessageEnum.richText });
+        }
+
+        const urls = rp.mediaUrls?.length
+          ? rp.mediaUrls
+          : rp.mediaUrl
+            ? [rp.mediaUrl]
+            : [];
+
+        for (const url of [...urls, ...extractedFromText]) {
           await sendMessageTypeX(client, chatId, {}, { mediaUrl: url, msgType: TypeXMessageEnum.richText });
         }
       },
