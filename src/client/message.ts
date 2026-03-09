@@ -421,6 +421,10 @@ export async function processTypeXMessage(
             if (v) extractedFromText.push(v);
             return "";
           }).trim();
+          if (extractedFromText.length > 0) {
+            logger?.info?.(`[typex:${accountId}] extracted outbound media directives: ${extractedFromText.join(", ")}`);
+            console.log('extracted outbound media directives', extractedFromText);
+          }
         }
 
         if (text) {
@@ -434,6 +438,8 @@ export async function processTypeXMessage(
             : [];
 
         for (const url of [...urls, ...extractedFromText]) {
+          logger?.info?.(`[typex:${accountId}] sending outbound mediaUrl=${url}`);
+          console.log('sending outbound mediaUrl', url);
           await sendMessageTypeX(client, chatId, {}, { mediaUrl: url, msgType: TypeXMessageEnum.richText });
         }
       },
