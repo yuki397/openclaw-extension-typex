@@ -25,6 +25,8 @@ import {
 import { getTypeXRuntime } from "./runtime.js";
 import { sendMessageTypeX } from "./send.js";
 import { TypeXMessageEnum, type TypeXMessageEntry } from "./types.js";
+import fs from "node:fs";
+import path from "node:path";
 
 export type ProcessTypeXMessageOptions = {
   cfg?: OpenClawConfig;
@@ -204,21 +206,89 @@ export async function processTypeXMessage(
   }
 
   // ── Fetch image/file attachments ──────────────────────────────────────────
-  const attachments: { "content-type": string; size: number; payload: string }[] = [];
+  const attachments: any[] = [];
+  const attachmentPaths: string[] = [];
   const typeNum = Number(payload.msg_type);
   if ([TypeXMessageEnum.image, TypeXMessageEnum.photoCollageMsg, TypeXMessageEnum.file, TypeXMessageEnum.fileGroup].includes(typeNum)) {
-    const objectKey = payload.content.image_key || payload.content.file_key;
-    if (objectKey) {
+    const parsedContent: any = typeof payload.content === "string" ? JSON.parse(payload.content) : payload.content;
+    console.log('parsedContent', parsedContent);
+    const objectKeys = new Set<string>();
+
+    const extractKey = (urlStr?: string) => {
+      if (!urlStr) return;
+      try {
+        const u = new URL(urlStr);
+        const k = u.searchParams.get("object_key");
+        if (k) objectKeys.add(k);
+      } catch { }
+    };
+
+    if (parsedContent.image_key) objectKeys.add(parsedContent.image_key);
+    if (parsedContent.file_key) objectKeys.add(parsedContent.file_key);
+    extractKey(parsedContent.object_url);
+
+    if (Array.isArray(parsedContent.images)) {
+      parsedContent.images.forEach((img: any) => extractKey(img.object_url));
+    }
+    if (Array.isArray(parsedContent.videos)) {
+      parsedContent.videos.forEach((vid: any) => extractKey(vid.object_url));
+    }
+    if (Array.isArray(parsedContent.items)) {
+      parsedContent.items.forEach((item: any) => {
+        const mc = typeof item.content === 'string' ? JSON.parse(item.content) : item.content;
+        if (mc?.image_key) objectKeys.add(mc.image_key);
+        if (mc?.file_key) objectKeys.add(mc.file_key);
+        extractKey(mc?.object_url);
+      });
+    }
+
+    if (objectKeys.size > 0) {
       if (client.mode === "bot") {
-        logger?.info(`[typex:${accountId}] fetching attachment objectKey=${objectKey}`);
-        const fileData = await client.fetchFileBuffer(objectKey);
-        if (fileData) {
-          attachments.push({
-            "content-type": fileData.mimeType,
-            size: fileData.buffer.length,
-            payload: fileData.buffer.toString("base64"),
-          });
+        for (const objectKey of objectKeys) {
+          logger?.info(`[typex:${accountId}] fetching attachment objectKey=${objectKey}`);
+          const fileData = await client.fetchFileBuffer(objectKey);
+          if (fileData) {
+            const isImage = fileData.mimeType.startsWith("image/");
+
+            // Persist to local disk so the agent can open the image via the read tool
+            // even if this surface can't transport binary attachments to the model.
+            try {
+              const extRaw = String(fileData.mimeType ?? "application/octet-stream").split("/")[1] ?? "bin";
+              const ext = extRaw === "jpeg" ? "jpg" : extRaw;
+              const outDir = path.join(process.env.HOME ?? ".", ".openclaw", "typex-attachments", String(payload.message_id));
+              fs.mkdirSync(outDir, { recursive: true });
+              const baseName = String(objectKey).replace(/[^a-zA-Z0-9._-]+/g, "_");
+              const outPath = path.join(outDir, `${baseName}.${ext}`);
+              fs.writeFileSync(outPath, fileData.buffer);
+              attachmentPaths.push(outPath);
+              logger?.info?.(`[typex:${accountId}] saved attachment to ${outPath}`);
+              console.log('saved attachment to', outPath);
+            } catch (e: any) {
+              const msg = e?.message ?? String(e);
+              logger?.warn?.(`[typex:${accountId}] failed to persist attachment: ${msg}`);
+              console.log('failed to persist attachment', msg);
+              try {
+                console.log('persist debug', {
+                  home: process.env.HOME,
+                  cwd: process.cwd(),
+                  messageId: payload.message_id,
+                  objectKey,
+                  mimeType: fileData.mimeType,
+                });
+              } catch {}
+            }
+
+            attachments.push({
+              contentType: fileData.mimeType,
+              mimeType: fileData.mimeType, // Alias
+              size: fileData.buffer.length,
+              payload: fileData.buffer.toString("base64"),
+              data: fileData.buffer.toString("base64"), // Alias
+              type: isImage ? "image" : "file", // Alias
+            });
+          }
         }
+        console.log('processed attachments:', attachments.map(a => ({ type: a.contentType, size: a.size })));
       } else {
         logger?.info(`[typex:${accountId}] skipping attachment fetch because mode is not bot`);
       }
@@ -229,6 +299,10 @@ export async function processTypeXMessage(
   const cleanText = checkBotMentioned(payload, appId)
     ? stripBotMention(rawText, payload.mentions)
     : rawText;
+
+  const cleanTextWithAttachments = attachmentPaths.length > 0
+    ? `${cleanText}\n\n[TypeX attachments saved locally]\n${attachmentPaths.map(p => `- ${p}`).join("\n")}`
+    : cleanText;
 
   // ── Session routing ───────────────────────────────────────────────────────
   const peerId = isGroup ? chatId : senderId;
@@ -252,7 +326,7 @@ export async function processTypeXMessage(
   const agentBody = buildAgentBody({
     messageId: payload.message_id,
     senderLabel: senderName,
-    content: cleanText,
+    content: cleanTextWithAttachments,
     quotedContent,
   });
 
@@ -297,8 +371,8 @@ export async function processTypeXMessage(
     InboundHistory: inboundHistory,
     ReplyToId: payload.parent_id,
     RootMessageId: payload.root_id,
-    RawBody: cleanText,
-    CommandBody: cleanText,
+    RawBody: cleanTextWithAttachments,
+    CommandBody: cleanTextWithAttachments,
     From: `typex:${senderId}`,
     To: typexTo,
     SessionKey: route.sessionKey,
@@ -316,6 +390,9 @@ export async function processTypeXMessage(
     OriginatingChannel: CHANNEL_ID,
     OriginatingTo: typexTo,
     Attachments: attachments.length > 0 ? attachments : undefined,
+    attachments: attachments.length > 0 ? attachments : undefined, // Alias
+    Media: attachments.length > 0 ? attachments : undefined,
+    media: attachments.length > 0 ? attachments : undefined, // Alias
   });
 
   logger?.info(`[typex:${accountId}] dispatching (session=${route.sessionKey ?? "default"})`);
