@@ -1,8 +1,8 @@
 import { WizardPrompter } from "openclaw/plugin-sdk";
 import { TypeXMessageEnum, type TypeXClientOptions, type TypeXMessageEntry } from "./types.js";
 
-const TYPEX_DOMAIN = "https://api-coco.typex.im";
-// const TYPEX_DOMAIN = "https://api-tx.bossjob.net.cn";
+// const TYPEX_DOMAIN = "https://api-coco.typex.im";
+const TYPEX_DOMAIN = "https://api-tx.bossjob.net.cn";
 
 let prompter: WizardPrompter | undefined;
 
@@ -87,20 +87,23 @@ export class TypeXClient {
 
     let payloadStr: string;
     if (isBot) {
-      // For text messages (type 0), content might be a string.
-      // For media (image/file), content is an object (constructed in sendMessageTypeX)
-      let botContentStr: string;
-      if (msgType === 0) {
-        botContentStr = typeof content === "string" ? JSON.stringify({ text: content })
-          : (typeof finalContent === "string" ? finalContent : JSON.stringify(content));
+      let botContentObj: any;
+      if (msgType === TypeXMessageEnum.text || msgType === TypeXMessageEnum.richText) {
+        // According to docs, text type content format: {"text":"test"}
+        // Assuming content or finalContent holds the actual string text.
+        botContentObj = {
+          text: typeof content === "string" ? content : (typeof finalContent === "string" ? finalContent : JSON.stringify(content))
+        };
+        // Ensure msgType is 0 when sending to `/open/robot/send_message` since 8 might not be supported natively by robot API
+        msgType = TypeXMessageEnum.text;
       } else {
         // Image or File object payload for bot
-        botContentStr = typeof finalContent === "string" ? finalContent : JSON.stringify(content);
+        botContentObj = typeof finalContent === "string" ? { text: finalContent } : content;
       }
 
       payloadStr = JSON.stringify({
         chat_id: to,
-        content: botContentStr,
+        content: botContentObj,
         msg_type: msgType,
       });
     } else {
@@ -115,11 +118,19 @@ export class TypeXClient {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        ...(isBot ? { Authorization: `Bearer ${token}` } : { Cookie: token }),
+        ...(isBot ? { Authorization: `Bearer ${token}`, "x-developer": "ryan" } : { Cookie: token }),
       },
       body: payloadStr,
     });
-    const resJson = await response.json();
+
+    const bodyText = await response.text();
+    let resJson;
+    try {
+      resJson = JSON.parse(bodyText);
+    } catch (e) {
+      throw new Error(`Send message failed (invalid JSON): HTTP ${response.status} - ${bodyText}`);
+    }
+
     if (resJson.code !== 0) {
       throw new Error(`Send message failed: [${resJson.code}] ${resJson.msg || resJson.message}`);
     }
@@ -157,6 +168,7 @@ export class TypeXClient {
       method: "POST",
       headers: {
         Authorization: `Bearer ${this.accessToken}`,
+        "x-developer": "ryan"
         // Note: fetch will automatically set the Content-Type boundary
       },
       body: formData,
@@ -174,7 +186,7 @@ export class TypeXClient {
    */
   async fetchMessages(pos: number): Promise<TypeXMessageEntry[]> {
     return this.mode === "bot"
-      ? this.fetchBotMessages(pos)
+      ? this.fetchBotMessages()
       : this.fetchUserMessages(pos);
   }
 
@@ -184,7 +196,7 @@ export class TypeXClient {
     try {
       const response = await fetch(`${TYPEX_DOMAIN}/open/claw/message`, {
         method: "POST",
-        headers: { Cookie: this.accessToken, "Content-Type": "application/json" },
+        headers: { Cookie: this.accessToken, "Content-Type": "application/json", 'x-developer': 'ryan' },
         body: JSON.stringify({ pos }),
       });
       const resJson = await response.json();
@@ -200,17 +212,17 @@ export class TypeXClient {
    * Pull messages for a bot account (Bearer token auth).
    * TODO: replace /open/bot/message with the actual endpoint path once confirmed.
    */
-  private async fetchBotMessages(pos: number): Promise<TypeXMessageEntry[]> {
+  private async fetchBotMessages(): Promise<TypeXMessageEntry[]> {
     if (!this.accessToken) return [];
     try {
-      const response = await fetch(`${TYPEX_DOMAIN}/open/bot/message`, {
+      const response = await fetch(`${TYPEX_DOMAIN}/open/robot/message/pull`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${this.accessToken}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ pos }),
+        headers: { Authorization: `Bearer ${this.accessToken}`, "Content-Type": "application/json", 'x-developer': 'ryan' },
+        body: JSON.stringify({ limit: 5 }),
       });
       const resJson = await response.json();
       if (resJson.code !== 0) return [];
-      return Array.isArray(resJson.data) ? resJson.data : [];
+      return Array.isArray(resJson.data?.messages) ? resJson.data.messages : [];
     } catch (e) {
       console.log(`Bot fetch messages error: ${e}`);
       return [];
@@ -227,7 +239,7 @@ export class TypeXClient {
       const response = await fetch(`${TYPEX_DOMAIN}/open/claw/message/${messageId}`, {
         method: "GET",
         headers: isBot
-          ? { Authorization: `Bearer ${this.accessToken}`, "Content-Type": "application/json" }
+          ? { Authorization: `Bearer ${this.accessToken}`, "Content-Type": "application/json", 'x-developer': 'ryan' }
           : { Cookie: this.accessToken, "Content-Type": "application/json" },
       });
       const resJson = await response.json();
@@ -250,7 +262,7 @@ export class TypeXClient {
 
       const response = await fetch(url, {
         method: "GET",
-        headers: { Authorization: `Bearer ${this.accessToken}` },
+        headers: { Authorization: this.accessToken, 'x-developer': 'ryan' },
       });
 
       if (!response.ok) return null;

@@ -132,9 +132,8 @@ export async function processTypeXMessage(
       return;
     }
 
-    const requireMention: boolean = groupConfig?.requireMention ?? typexCfg?.requireMention ?? true;
+    const requireMention: boolean = groupConfig?.requireMention ?? typexCfg?.requireMention ?? false;
     const mentionedBot = checkBotMentioned(payload, appId);
-
     if (requireMention && !mentionedBot) {
       logger?.info(`[typex:${accountId}] no @mention — buffering to history`);
       if (chatHistories) {
@@ -156,7 +155,7 @@ export async function processTypeXMessage(
 
   // ── DM policy check ───────────────────────────────────────────────────────
   if (!isGroup) {
-    const dmPolicy: string = typexCfg?.dmPolicy ?? "pairing";
+    const dmPolicy: string = typexCfg?.dmPolicy ?? "open";
     const configAllowFrom: Array<string | number> = typexCfg?.allowFrom ?? [];
 
     const storeAllowFrom =
@@ -172,13 +171,6 @@ export async function processTypeXMessage(
         return norm === "*" || norm === normalizeAllowEntry(senderId);
       });
 
-    console.table({
-      dmPolicy,
-      configAllowFrom,
-      storeAllowFrom,
-      effectiveDmAllowFrom,
-      dmAllowed,
-    });
     if (dmPolicy !== "open" && !dmAllowed) {
       if (dmPolicy === "pairing") {
         const result = await channel.pairing?.upsertPairingRequest?.({
@@ -187,7 +179,6 @@ export async function processTypeXMessage(
           id: senderId,
           meta: { name: senderName !== senderId ? senderName : undefined },
         });
-        console.log('result', result);
         if (result) {
           const replyText = channel.pairing?.buildPairingReply?.({
             channel: CHANNEL_ID,
