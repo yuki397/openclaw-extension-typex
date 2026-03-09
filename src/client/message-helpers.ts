@@ -16,12 +16,17 @@ export function normalizeMessageToText(msg: TypeXMessageEntry): string {
 
   switch (typeNum) {
     case TypeXMessageEnum.text:
-    case TypeXMessageEnum.richText:
-      return msg.content.text ?? "";
+    case TypeXMessageEnum.richText: {
+      const parsedContent = typeof msg.content === "string" ? JSON.parse(msg.content) : msg.content;
+      return parsedContent.text ?? parsedContent.preview_text ?? "";
+    }
 
     case TypeXMessageEnum.image:
-    case TypeXMessageEnum.photoCollageMsg:
-      return "<media:image>";
+    case TypeXMessageEnum.photoCollageMsg: {
+      const parsedContent = typeof msg.content === "string" ? JSON.parse(msg.content) : msg.content;
+      const text = (parsedContent.text ?? parsedContent.preview_text ?? "").trim();
+      return text ? `${text} <media:image>` : "<media:image>";
+    }
 
     case TypeXMessageEnum.file:
     case TypeXMessageEnum.fileGroup:

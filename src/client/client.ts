@@ -258,14 +258,17 @@ export class TypeXClient {
     try {
       const query = new URLSearchParams({ object_key: objectKey });
       if (size) query.append("size", size);
-      const url = `${TYPEX_DOMAIN}/open/robot/file?${query.toString()}`;
+      const url = `${TYPEX_DOMAIN}/open/robot/chat/file?${query.toString()}`;
 
       const response = await fetch(url, {
         method: "GET",
-        headers: { Authorization: this.accessToken, 'x-developer': 'ryan' },
+        headers: { Authorization: `Bearer ${this.accessToken}`, 'x-developer': 'ryan' },
       });
 
-      if (!response.ok) return null;
+      if (!response.ok) {
+        console.log(`fetchFileBuffer failed with status: ${response.status} ${response.statusText} for url: ${url}`);
+        return null;
+      }
 
       const arrayBuffer = await response.arrayBuffer();
       const buffer = Buffer.from(arrayBuffer);
