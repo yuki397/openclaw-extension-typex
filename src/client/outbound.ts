@@ -8,8 +8,9 @@ export const typexOutbound: ChannelOutboundAdapter = {
   chunkerMode: "markdown",
   textChunkLimit: 2000,
 
-  sendText: async ({ to, text, accountId }: any) => {
-    const client = getTypeXClient(accountId ?? undefined);
+  sendText: async ({ to, text, accountId, cfg }: any) => {
+    const typexCfg = (cfg?.channels?.["openclaw-extension-typex"] ?? {}) as Record<string, any>;
+    const client = getTypeXClient(accountId ?? undefined, { typexCfg });
     const result = await sendMessageTypeX(client, to, text);
     return {
       channel: "openclaw-extension-typex",
@@ -18,8 +19,9 @@ export const typexOutbound: ChannelOutboundAdapter = {
     };
   },
 
-  sendMedia: async ({ to, text, mediaUrl, accountId }: any) => {
-    const client = getTypeXClient(accountId ?? undefined);
+  sendMedia: async ({ to, text, mediaUrl, accountId, cfg }: any) => {
+    const typexCfg = (cfg?.channels?.["openclaw-extension-typex"] ?? {}) as Record<string, any>;
+    const client = getTypeXClient(accountId ?? undefined, { typexCfg });
     const result = await sendMessageTypeX(client, to, text || "", { mediaUrl });
     return {
       channel: "openclaw-extension-typex",

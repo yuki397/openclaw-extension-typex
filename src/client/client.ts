@@ -70,7 +70,7 @@ export class TypeXClient {
    * @param to  chat_id to send to
    * @param content  message text or object
    */
-  async sendMessage(to: string, content: string | object, msgType: TypeXMessageEnum = 0) {
+  async sendMessage(to: string, content: string | object, msgType: TypeXMessageEnum = 0, options: { replyMsgId?: string } = {}) {
     const token = this.accessToken;
     if (!token) throw new Error("TypeXClient: Not authenticated.");
 
@@ -105,6 +105,7 @@ export class TypeXClient {
         chat_id: to,
         content: botContentObj,
         msg_type: msgType,
+        reply_msg_id: options.replyMsgId || "0",
       });
     } else {
       payloadStr = JSON.stringify({
@@ -295,8 +296,14 @@ export function getTypeXClient(accountId?: string, manualOptions?: TypeXClientOp
     if (acctCfg.mode === "bot" || acctCfg.mode === "user") mode = acctCfg.mode;
   }
 
+  // Config check: outbound sends should fail only when we truly lack credentials.
+  // Historically this was a stub that always threw, which broke outbound delivery.
   if (!manualOptions?.skipConfigCheck) {
-    throw new Error("TypeX not configured yet.");
+    if (!token?.trim()) {
+      throw new Error(
+        "TypeX not configured: missing token. Run the TypeX onboarding (QR login / bot token) or set channels.openclaw-extension-typex.accounts.<accountId>.token",
+      );
+    }
   }
 
   return new TypeXClient({ token, mode });
