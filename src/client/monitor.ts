@@ -219,12 +219,21 @@ export async function monitorTypeXProvider(opts: MonitorTypeXOpts) {
 
   // --- Polling Loop ---
   while (!abortSignal.aborted) {
+    let messages: Awaited<ReturnType<typeof client.fetchMessages>>;
     try {
-      const messages = await client.fetchMessages(currentPos);
-      console.log('messages', messages);
+      messages = await client.fetchMessages(currentPos);
+    } catch (err) {
+      // fetchMessages threw — this is treated as a fatal error (e.g. auth failure,
+      // bad token, server unreachable). Stop the monitor so we don't spam the API.
+      logger?.error(
+        `[${accountObj.accountId}] Fatal error fetching TypeX messages; stopping monitor: ${err instanceof Error ? err.stack : String(err)}`,
+      );
+      break;
+    }
 
-      if (messages && messages.length > 0) {
-        for (const msg of messages) {
+    if (messages && messages.length > 0) {
+      for (const msg of messages) {
+        try {
           // Dispatch to OpenClaw via processTypeXMessage
           await processTypeXMessage(client, msg, appId || accountObj.accountId, {
             accountId: accountObj.accountId,
@@ -239,12 +248,13 @@ export async function monitorTypeXProvider(opts: MonitorTypeXOpts) {
             currentPos = msg.position;
             await savePos(accountObj.accountId, currentPos);
           }
+        } catch (err) {
+          // Non-fatal: one message failed, but we keep the loop alive.
+          logger?.error(
+            `Error processing TypeX message ${msg.message_id}: ${err instanceof Error ? err.stack : String(err)}`,
+          );
         }
       }
-    } catch (err) {
-      logger?.error(
-        `Error in TypeX polling loop: ${err instanceof Error ? err.stack : String(err)}`,
-      );
     }
 
     if (abortSignal.aborted) {

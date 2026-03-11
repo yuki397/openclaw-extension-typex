@@ -428,7 +428,7 @@ export async function processTypeXMessage(
         }
 
         if (text) {
-          await sendMessageTypeX(client, chatId, text, { msgType: TypeXMessageEnum.richText });
+          await sendMessageTypeX(client, chatId, text, { msgType: TypeXMessageEnum.richText, replyMsgId: payload.message_id });
         }
 
         const urls = rp.mediaUrls?.length
@@ -440,7 +440,7 @@ export async function processTypeXMessage(
         for (const url of [...urls, ...extractedFromText]) {
           logger?.info?.(`[typex:${accountId}] sending outbound mediaUrl=${url}`);
           console.log('sending outbound mediaUrl', url);
-          await sendMessageTypeX(client, chatId, {}, { mediaUrl: url, msgType: TypeXMessageEnum.richText });
+          await sendMessageTypeX(client, chatId, {}, { mediaUrl: url, msgType: TypeXMessageEnum.richText, replyMsgId: payload.message_id });
         }
       },
       onError: (err: Error) => {
