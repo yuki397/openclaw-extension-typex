@@ -281,6 +281,78 @@ export class TypeXClient {
       return null;
     }
   }
+
+  /**
+   * Search feeds by name (User mode)
+   */
+  async fetchFeedsByName(name: string): Promise<Array<{ id: string; name: string }>> {
+    // ---- MOCK FOR LOCAL TESTING ----
+    if (name.toLowerCase().includes("frannie")) {
+      return [{ id: "7459241604734277650", name: "Frannie Voss" }];
+    }
+    // --------------------------------
+
+    if (!this.accessToken || this.mode !== "user") return [];
+    try {
+      const response = await fetch(`${TYPEX_DOMAIN}/open/claw/feeds_by_name`, {
+        method: "POST",
+        headers: { Cookie: this.accessToken, "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      const resJson = await response.json();
+      if (resJson.code !== 0) return [];
+      return Array.isArray(resJson.data) ? resJson.data : [];
+    } catch (e) {
+      console.log(`fetchFeedsByName error: ${e}`);
+      return [];
+    }
+  }
+
+  /**
+   * Search contacts by name (User mode)
+   */
+  async fetchContactsByName(name: string): Promise<Array<{ id: string; name: string; alias?: string }>> {
+    // ---- MOCK FOR LOCAL TESTING ----
+    if (name.toLowerCase().includes("frannie")) {
+      return [{ id: "7459241604734277650", name: "Frannie Voss", alias: "Frannie" }];
+    }
+    // --------------------------------
+
+    if (!this.accessToken || this.mode !== "user") return [];
+    try {
+      const response = await fetch(`${TYPEX_DOMAIN}/open/claw/contacts_by_name`, {
+        method: "POST",
+        headers: { Cookie: this.accessToken, "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      const resJson = await response.json();
+      if (resJson.code !== 0) return [];
+      return Array.isArray(resJson.data) ? resJson.data : [];
+    } catch (e) {
+      console.log(`fetchContactsByName error: ${e}`);
+      return [];
+    }
+  }
+
+  /**
+   * Search group members by name (Bot mode)
+   */
+  async fetchGroupMembersByName(name: string): Promise<Array<{ id: string; name: string; group_alias?: string }>> {
+    if (!this.accessToken || this.mode !== "bot") return [];
+    try {
+      const response = await fetch(`${TYPEX_DOMAIN}/open/claw/group_members`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${this.accessToken}`, "Content-Type": "application/json", 'x-developer': 'ryan' },
+        body: JSON.stringify({ name }),
+      });
+      const resJson = await response.json();
+      if (resJson.code !== 0) return [];
+      return Array.isArray(resJson.data) ? resJson.data : [];
+    } catch (e) {
+      console.log(`fetchGroupMembersByName error: ${e}`);
+      return [];
+    }
+  }
 }
 
 export function getTypeXClient(accountId?: string, manualOptions?: TypeXClientOptions) {

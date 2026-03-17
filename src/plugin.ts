@@ -4,6 +4,7 @@ import { monitorTypeXProvider } from "./client/monitor.js";
 import { typexOutbound } from "./client/outbound.js";
 import { TypeXConfigSchema } from "./config-schema.js";
 import { typexOnboardingAdapter } from "./onboarding.js";
+import { typexDirectory } from "./directory.js";
 
 const meta = {
   id: "openclaw-extension-typex",
@@ -27,16 +28,25 @@ export const typexPlugin = {
     threads: false,
     polls: false,
     nativeCommands: false,
-    blockStreaming: false,
+    blockStreaming: true,
+  },
+  agentPrompt: {
+    messageToolHints: () => [
+      "You can send messages to other users or groups on TypeX by using the messaging tools.",
+      "Always resolve the recipient's ID using directory search (listPeers or listGroups) if you only have a name.",
+    ],
   },
   reload: { configPrefixes: ["channels.typex"] },
   outbound: typexOutbound as any,
 
   messaging: {
-    normalizeTarget: (t) => t,
+    normalizeTarget: (t) => t.trim().replace(/^typex:/i, ""),
     targetResolver: {
-      looksLikeId: () => true,
-      hint: "chat_id",
+      looksLikeId: (raw) => {
+        const trimmed = raw.trim();
+        return /^\d+$/.test(trimmed);
+      },
+      hint: "<chat_id>",
     },
   },
 
@@ -77,8 +87,17 @@ export const typexPlugin = {
       configured: acc.configured,
       tokenSource: acc.tokenSource,
     }),
-    resolveAllowFrom: () => [],
-    formatAllowFrom: () => [],
+    resolveAllowFrom: ({ cfg, accountId }) => {
+      const typexCfg = (cfg.channels?.['openclaw-extension-typex'] ?? {}) as any;
+      const account = typexCfg.accounts?.[accountId ?? DEFAULT_ACCOUNT_ID];
+      const allowFrom = account?.allowFrom ?? typexCfg.allowFrom ?? [];
+      return allowFrom.map((e: any) => String(e));
+    },
+    formatAllowFrom: ({ allowFrom }) =>
+      allowFrom
+        .map((entry) => String(entry).trim())
+        .filter(Boolean)
+        .map((entry) => entry.replace(/^typex:/i, "")),
   },
 
   gateway: {
@@ -136,11 +155,7 @@ export const typexPlugin = {
     },
   },
 
-  directory: {
-    self: async () => null,
-    listPeers: async () => [],
-    listGroups: async () => [],
-  },
+  directory: typexDirectory,
 
   status: {
     defaultRuntime: {
