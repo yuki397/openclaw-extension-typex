@@ -105,12 +105,27 @@ export const typexPlugin = {
         });
       } catch (err) {
         log?.error(`TypeX Provider crashed: ${err}`);
+
+        const errorMessage = err instanceof Error ? err.message : String(err);
+
         setStatus({
           accountId: account.accountId,
           running: false,
-          lastError: err instanceof Error ? err.message : String(err),
+          lastError: errorMessage,
           lastStopAt: Date.now(),
         });
+
+        if (errorMessage.includes("401") || errorMessage.includes("Unauthorized")) {
+          log?.error(`[${account.accountId}] Token is permanently invalid (401). Suspending account task to prevent auto-restart loop.`);
+
+          if (!abortSignal.aborted) {
+            await new Promise<void>((resolve) => {
+              abortSignal.addEventListener('abort', () => resolve());
+            });
+          }
+          return;
+        }
+
         throw err;
       }
     },

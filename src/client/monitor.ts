@@ -217,6 +217,8 @@ export async function monitorTypeXProvider(opts: MonitorTypeXOpts) {
   // Group history buffer: lives for the entire monitor lifetime.
   const chatHistories = new Map<string, HistoryEntry[]>();
 
+  let fatalError: Error | null = null;
+
   // --- Polling Loop ---
   while (!abortSignal.aborted) {
     let messages: Awaited<ReturnType<typeof client.fetchMessages>>;
@@ -228,6 +230,7 @@ export async function monitorTypeXProvider(opts: MonitorTypeXOpts) {
       logger?.error(
         `[${accountObj.accountId}] Fatal error fetching TypeX messages; stopping monitor: ${err instanceof Error ? err.stack : String(err)}`,
       );
+      fatalError = err instanceof Error ? err : new Error(String(err));
       break;
     }
 
@@ -263,4 +266,8 @@ export async function monitorTypeXProvider(opts: MonitorTypeXOpts) {
     await new Promise((resolve) => setTimeout(resolve, 3000));
   }
   logger?.info(`Stopping TypeX monitor...`);
+
+  if (fatalError) {
+    throw fatalError;
+  }
 }
