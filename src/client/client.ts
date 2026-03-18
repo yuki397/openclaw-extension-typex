@@ -119,7 +119,7 @@ export class TypeXClient {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        ...(isBot ? { Authorization: `Bearer ${token}`, "x-developer": "ryan" } : { Cookie: token }),
+        ...(isBot ? { Authorization: `Bearer ${token}` } : { Cookie: token }),
       },
       body: payloadStr,
     });
@@ -168,8 +168,7 @@ export class TypeXClient {
     const response = await fetch(`${TYPEX_DOMAIN}/open/robot/upload`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${this.accessToken}`,
-        "x-developer": "ryan"
+        Authorization: `Bearer ${this.accessToken}`
         // Note: fetch will automatically set the Content-Type boundary
       },
       body: formData,
@@ -197,13 +196,28 @@ export class TypeXClient {
     try {
       const response = await fetch(`${TYPEX_DOMAIN}/open/claw/message`, {
         method: "POST",
-        headers: { Cookie: this.accessToken, "Content-Type": "application/json", 'x-developer': 'ryan' },
+        headers: { Cookie: this.accessToken, "Content-Type": "application/json" },
         body: JSON.stringify({ pos }),
       });
+
+      if (response.status === 401) {
+        throw new Error("Unauthorized: 401 Token is invalid or expired.");
+      }
+      if (!response.ok) {
+        throw new Error(`HTTP Error: ${response.status}`);
+      }
+
       const resJson = await response.json();
-      if (resJson.code !== 0) return [];
+
+      if (resJson.code !== 0) {
+        throw new Error(`API Error: code ${resJson.code}, message: ${resJson.msg}`);
+      }
       return Array.isArray(resJson.data) ? resJson.data : [];
     } catch (e) {
+      if (e instanceof Error && e.message.includes("Unauthorized")) {
+        throw e;
+      }
+
       console.log(`Fetch messages error: ${e}`);
       return [];
     }
@@ -218,13 +232,28 @@ export class TypeXClient {
     try {
       const response = await fetch(`${TYPEX_DOMAIN}/open/robot/message/pull`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${this.accessToken}`, "Content-Type": "application/json", 'x-developer': 'ryan' },
+        headers: { Authorization: `Bearer ${this.accessToken}`, "Content-Type": "application/json" },
         body: JSON.stringify({ limit: 5 }),
       });
+
+      if (response.status === 401) {
+        throw new Error("Unauthorized: 401 Bot Token is invalid or expired.");
+      }
+      if (!response.ok) {
+        throw new Error(`HTTP Error: ${response.status}`);
+      }
+
       const resJson = await response.json();
-      if (resJson.code !== 0) return [];
+
+      if (resJson.code !== 0) {
+        return [];
+      }
       return Array.isArray(resJson.data?.messages) ? resJson.data.messages : [];
     } catch (e) {
+      if (e instanceof Error && e.message.includes("Unauthorized")) {
+        throw e;
+      }
+
       console.log(`Bot fetch messages error: ${e}`);
       return [];
     }
@@ -240,7 +269,7 @@ export class TypeXClient {
       const response = await fetch(`${TYPEX_DOMAIN}/open/claw/message/${messageId}`, {
         method: "GET",
         headers: isBot
-          ? { Authorization: `Bearer ${this.accessToken}`, "Content-Type": "application/json", 'x-developer': 'ryan' }
+          ? { Authorization: `Bearer ${this.accessToken}`, "Content-Type": "application/json" }
           : { Cookie: this.accessToken, "Content-Type": "application/json" },
       });
       const resJson = await response.json();
@@ -263,7 +292,7 @@ export class TypeXClient {
 
       const response = await fetch(url, {
         method: "GET",
-        headers: { Authorization: `Bearer ${this.accessToken}`, 'x-developer': 'ryan' },
+        headers: { Authorization: `Bearer ${this.accessToken}` },
       });
 
       if (!response.ok) {
