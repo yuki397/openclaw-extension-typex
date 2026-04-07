@@ -5,6 +5,6 @@ export const TYPEX_DOMAINS = {
 
 export type TypeXDomainTarget = keyof typeof TYPEX_DOMAINS;
 
-export const ACTIVE_TYPEX_DOMAIN_TARGET: TypeXDomainTarget = "test";
+export const ACTIVE_TYPEX_DOMAIN_TARGET: TypeXDomainTarget = "prod";
 
 export const TYPEX_DOMAIN = TYPEX_DOMAINS[ACTIVE_TYPEX_DOMAIN_TARGET];
