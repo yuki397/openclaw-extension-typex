@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.20] - 2026-04-07
+
+### Changed
+
+- Upgraded the OpenClaw dependency baseline to the latest stable line and bumped the plugin version to `1.0.20`.
+- Added repository checks for Conventional Commits plus a release-time TypeX domain guard so test-domain builds cannot be pushed or published accidentally.
+- Added TypeX recipient lookup and delivery flow support, allowing the bot to draft content and send it to a named conversation when the user asks for it in a DM or by mentioning the bot in a group.
+
 ## [1.0.17] - 2026-03-11
 
 > **⚠️ Pre-release Notice**: Due to limitations in the OpenClaw plugin development workflow, the published package cannot be tested in a production environment prior to release. All testing was done locally. After release, a round of online testing will be performed manually. **Do not update until an official announcement is posted.**
@@ -45,5 +53,4 @@ If you're upgrading from an earlier version, your existing position data will be
 - **Automatic legacy pos migration**: On startup, if no state file is found at the new path, the monitor automatically reads and migrates the pos from the legacy path to avoid replaying historical messages from position 0 after an upgrade.
 - **Unified message type**: All `sendMessageTypeX` calls (text and media) now explicitly pass `TypeXMessageEnum.richText` to ensure consistent message formatting.
 - **Improved error messages**.
-
 

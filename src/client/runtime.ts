@@ -2,7 +2,7 @@
  * Global runtime reference for the TypeX plugin.
  */
 
-import type { PluginRuntime } from "openclaw/plugin-sdk";
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 
 let runtime: PluginRuntime | null = null;
 

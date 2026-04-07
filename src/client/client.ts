@@ -1,8 +1,12 @@
-import { WizardPrompter } from "openclaw/plugin-sdk";
-import { TypeXMessageEnum, type TypeXClientOptions, type TypeXMessageEntry } from "./types.js";
-
-const TYPEX_DOMAIN = "https://api-coco.typex.im";
-// const TYPEX_DOMAIN = "https://api-tx.bossjob.net.cn";
+import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
+import { TYPEX_DOMAIN } from "./domain.js";
+import {
+  TypeXMessageEnum,
+  type TypeXClientOptions,
+  type TypeXContactSearchEntry,
+  type TypeXFeedSearchEntry,
+  type TypeXMessageEntry,
+} from "./types.js";
 
 let prompter: WizardPrompter | undefined;
 
@@ -28,6 +32,40 @@ export class TypeXClient {
 
   async getCurUserId() {
     return this.userId ?? "";
+  }
+
+  private getAuthHeaders(extraHeaders: Record<string, string> = {}) {
+    if (!this.accessToken) {
+      throw new Error("TypeXClient: Not authenticated.");
+    }
+
+    return this.mode === "bot"
+      ? { Authorization: `Bearer ${this.accessToken}`, ...extraHeaders }
+      : { Cookie: this.accessToken, ...extraHeaders };
+  }
+
+  private async postJson<T>(endpoint: string, payload: unknown): Promise<T> {
+    const response = await fetch(`${TYPEX_DOMAIN}${endpoint}`, {
+      method: "POST",
+      headers: this.getAuthHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify(payload),
+    });
+
+    const bodyText = await response.text();
+    let resJson: { code?: number; msg?: string; message?: string; data?: T };
+    try {
+      resJson = JSON.parse(bodyText);
+    } catch {
+      throw new Error(`TypeX API ${endpoint} returned invalid JSON: HTTP ${response.status} - ${bodyText}`);
+    }
+
+    if (!response.ok || resJson.code !== 0) {
+      throw new Error(
+        `TypeX API ${endpoint} failed: [${resJson.code ?? response.status}] ${resJson.msg || resJson.message || "unknown error"}`,
+      );
+    }
+
+    return (resJson.data ?? []) as T;
   }
 
   async fetchQrcodeUrl() {
@@ -71,8 +109,7 @@ export class TypeXClient {
    * @param content  message text or object
    */
   async sendMessage(to: string, content: string | object, msgType: TypeXMessageEnum = 0, options: { replyMsgId?: string } = {}) {
-    const token = this.accessToken;
-    if (!token) throw new Error("TypeXClient: Not authenticated.");
+    if (!this.accessToken) throw new Error("TypeXClient: Not authenticated.");
 
     let finalContent = content;
     if (typeof content === "object") {
@@ -117,10 +154,7 @@ export class TypeXClient {
 
     const response = await fetch(`${TYPEX_DOMAIN}${endpoint}`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(isBot ? { Authorization: `Bearer ${token}`, "x-developer": "ryan" } : { Cookie: token }),
-      },
+      headers: this.getAuthHeaders({ "Content-Type": "application/json" }),
       body: payloadStr,
     });
 
@@ -136,6 +170,16 @@ export class TypeXClient {
       throw new Error(`Send message failed: [${resJson.code}] ${resJson.msg || resJson.message}`);
     }
     return resJson.data || { message_id: `msg_${Date.now()}` };
+  }
+
+  async searchFeedsByName(name: string): Promise<TypeXFeedSearchEntry[]> {
+    if (!name.trim()) return [];
+    return this.postJson<TypeXFeedSearchEntry[]>("/open/claw/feeds_by_name", { name });
+  }
+
+  async searchContactsByName(name: string): Promise<TypeXContactSearchEntry[]> {
+    if (!name.trim()) return [];
+    return this.postJson<TypeXContactSearchEntry[]>("/open/claw/contacts_by_name", { name });
   }
 
   /**

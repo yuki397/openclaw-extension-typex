@@ -1,7 +1,9 @@
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
-import type { HistoryEntry, OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/channel-core";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { getTypeXClient } from "./client.js";
 import { processTypeXMessage } from "./message.js";
 import { getTypeXRuntime } from "./runtime.js";
@@ -263,4 +265,8 @@ export async function monitorTypeXProvider(opts: MonitorTypeXOpts) {
     await new Promise((resolve) => setTimeout(resolve, 3000));
   }
   logger?.info(`Stopping TypeX monitor...`);
+
+  if (fatalError) {
+    throw fatalError;
+  }
 }

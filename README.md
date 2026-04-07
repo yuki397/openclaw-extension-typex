@@ -18,3 +18,11 @@ Onboarding: select TypeX and confirm the install prompt to fetch the plugin auto
 
 Once the actual TypeX provider is implemented in the core `openclaw` repo, you can extend
 this plugin to wire outbound messaging and gateway/runtime logic.
+
+## Local checks
+
+```bash
+git config core.hooksPath .githooks
+npm run commitlint -- "feat(typex): add delivery flow"
+npm run verify:domain
+```

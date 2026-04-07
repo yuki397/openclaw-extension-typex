@@ -1,5 +1,6 @@
-import type { OpenClawConfig, DmPolicy, GroupPolicy } from "openclaw/plugin-sdk";
-import type { TypeXGroupConfig } from "../types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/channel-core";
+import type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/setup";
+import type { TypeXGroupConfig } from "../types.js";
 
 const firstDefined = <T>(...values: Array<T | undefined>) => {
   for (const value of values) {

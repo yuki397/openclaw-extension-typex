@@ -1,4 +1,4 @@
-import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk";
+import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/core";
 import { getTypeXClient } from "./client.js";
 import { sendMessageTypeX } from "./send.js";
 import { TypeXMessageEnum } from "./types.js";

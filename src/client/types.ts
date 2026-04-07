@@ -1,4 +1,5 @@
-import { OpenClawConfig, WizardPrompter } from "openclaw/plugin-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/channel-core";
+import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 
 export enum TypeXMessageEnum {
   text = 0,
@@ -72,4 +73,15 @@ export interface TypeXMessageEntry {
   create_time: number;
   /** Monotonic position cursor used by the polling loop. */
   position: number;
+}
+
+export interface TypeXFeedSearchEntry {
+  id: string;
+  chat_id: string;
+  name?: string;
+}
+
+export interface TypeXContactSearchEntry {
+  friend_id: string;
+  name?: string;
 }

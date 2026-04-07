@@ -1,6 +1,6 @@
 {
   "name": "openclaw-extension-typex",
-  "version": "1.0.17",
+  "version": "1.0.20",
   "description": "TypeX channel integration for OpenClaw",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -12,7 +12,10 @@
   ],
   "scripts": {
     "build": "tsc",
-    "prepublishOnly": "npm run build"
+    "commitlint": "node scripts/commitlint.mjs",
+    "verify:domain": "node scripts/verify-typex-domain.mjs",
+    "check:release": "npm run verify:domain && npm run build",
+    "prepublishOnly": "npm run check:release"
   },
   "keywords": [
     "openclaw",
@@ -20,15 +23,15 @@
     "typex",
     "bot"
   ],
-  "author": "Your Name",
+  "author": "yuki397",
   "license": "MIT",
   "peerDependencies": {
-    "openclaw": "*"
+    "openclaw": "^2026.4.2"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/qrcode-terminal": "^0.12.2",
-    "openclaw": "latest",
+    "openclaw": "^2026.4.2",
     "typescript": "^5.0.0"
   },
   "dependencies": {
@@ -38,6 +41,23 @@
   "openclaw": {
     "extensions": [
       "./dist/index.js"
-    ]
+    ],
+    "setupEntry": "./dist/setup-entry.js",
+    "channel": {
+      "id": "openclaw-extension-typex",
+      "label": "TypeX",
+      "selectionLabel": "TypeX (QR Code Login)",
+      "detailLabel": "TypeX Bot",
+      "docsPath": "/channels/typex",
+      "docsLabel": "typex",
+      "blurb": "TypeX bot via QR Code login.",
+      "order": 100,
+      "quickstartAllowFrom": true,
+      "exposure": {
+        "configured": true,
+        "setup": true,
+        "docs": true
+      }
+    }
   }
 }

@@ -5,13 +5,14 @@
  * Pure helpers live in ./message-helpers.ts.
  */
 
-import type { HistoryEntry, OpenClawConfig } from "openclaw/plugin-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/channel-core";
 import {
+  type HistoryEntry,
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
   DEFAULT_GROUP_HISTORY_LIMIT,
   recordPendingHistoryEntryIfEnabled,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/reply-history";
 import type { TypeXClient } from "./client.js";
 import {
   buildAgentBody,
@@ -24,9 +25,14 @@ import {
 } from "./message-helpers.js";
 import { getTypeXRuntime } from "./runtime.js";
 import { sendMessageTypeX } from "./send.js";
-import { TypeXMessageEnum, type TypeXMessageEntry } from "./types.js";
+import {
+  TypeXMessageEnum,
+  type TypeXFeedSearchEntry,
+  type TypeXMessageEntry,
+} from "./types.js";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 
 export type ProcessTypeXMessageOptions = {
   cfg?: OpenClawConfig;
@@ -45,6 +51,45 @@ export type ProcessTypeXMessageOptions = {
 export { buildAgentBody, checkBotMentioned, normalizeMessageToText, stripBotMention } from "./message-helpers.js";
 
 const CHANNEL_ID = "openclaw-extension-typex";
+
+type DeliveryIntent = {
+  recipientName: string;
+};
+
+function parseDeliveryIntent(text: string): DeliveryIntent | null {
+  const match = text.match(
+    /(?:发送|发|转发)(?:消息|信息|内容)?给\s*[“"'`]?([^，“”"'`。；;！？?!\n]+?)[”"'`]?(?=\s*(?:[,，。；;！？?!\n]|内容|说|并|然后|$))/u,
+  );
+
+  const recipientName = match?.[1]?.trim();
+  if (!recipientName) {
+    return null;
+  }
+
+  return { recipientName };
+}
+
+function normalizeSearchName(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, "");
+}
+
+function pickBestFeedMatch(name: string, feeds: TypeXFeedSearchEntry[]): TypeXFeedSearchEntry | null {
+  if (feeds.length === 0) {
+    return null;
+  }
+
+  const normalizedNeedle = normalizeSearchName(name);
+  const exactMatch = feeds.find((feed) => normalizeSearchName(feed.name ?? "") === normalizedNeedle);
+  if (exactMatch) {
+    return exactMatch;
+  }
+
+  if (feeds.length === 1) {
+    return feeds[0];
+  }
+
+  return null;
+}
 
 export async function processTypeXMessage(
   client: TypeXClient,
@@ -254,7 +299,8 @@ export async function processTypeXMessage(
             try {
               const extRaw = String(fileData.mimeType ?? "application/octet-stream").split("/")[1] ?? "bin";
               const ext = extRaw === "jpeg" ? "jpg" : extRaw;
-              const outDir = path.join(process.env.HOME ?? ".", ".openclaw", "typex-attachments", String(payload.message_id));
+              const homeDir = os.homedir?.() ?? ".";
+              const outDir = path.join(homeDir, ".openclaw", "typex-attachments", String(payload.message_id));
               fs.mkdirSync(outDir, { recursive: true });
               const baseName = String(objectKey).replace(/[^a-zA-Z0-9._-]+/g, "_");
               const outPath = path.join(outDir, `${baseName}.${ext}`);
@@ -266,15 +312,6 @@ export async function processTypeXMessage(
               const msg = e?.message ?? String(e);
               logger?.warn?.(`[typex:${accountId}] failed to persist attachment: ${msg}`);
               console.log('failed to persist attachment', msg);
-              try {
-                console.log('persist debug', {
-                  home: process.env.HOME,
-                  cwd: process.cwd(),
-                  messageId: payload.message_id,
-                  objectKey,
-                  mimeType: fileData.mimeType,
-                });
-              } catch { }
             }
 
             attachments.push({
@@ -302,6 +339,10 @@ export async function processTypeXMessage(
   const cleanTextWithAttachments = attachmentPaths.length > 0
     ? `${cleanText}\n\n[TypeX attachments saved locally]\n${attachmentPaths.map(p => `- ${p}`).join("\n")}`
     : cleanText;
+  const deliveryIntent = parseDeliveryIntent(cleanText);
+  const contentForAgent = deliveryIntent
+    ? `${cleanTextWithAttachments}\n\n[TypeX delivery request]\nPlease draft only the final message body that should be sent to "${deliveryIntent.recipientName}". Do not add explanations or delivery-status text unless the user explicitly asked for them.`
+    : cleanTextWithAttachments;
 
   // ── Session routing ───────────────────────────────────────────────────────
   const peerId = isGroup ? chatId : senderId;
@@ -325,7 +366,7 @@ export async function processTypeXMessage(
   const agentBody = buildAgentBody({
     messageId: payload.message_id,
     senderLabel: senderName,
-    content: cleanTextWithAttachments,
+    content: contentForAgent,
     quotedContent,
   });
 
@@ -427,7 +468,44 @@ export async function processTypeXMessage(
           }
         }
 
-        if (text) {
+        if (text && deliveryIntent) {
+          let targetSent = false;
+          try {
+            const feeds = await client.searchFeedsByName(deliveryIntent.recipientName);
+            const bestFeed = pickBestFeedMatch(deliveryIntent.recipientName, feeds);
+
+            if (bestFeed?.chat_id) {
+              await sendMessageTypeX(client, bestFeed.chat_id, text, { msgType: TypeXMessageEnum.richText });
+              targetSent = true;
+
+              const receipt = isGroup
+                ? `已将生成内容发送给 ${deliveryIntent.recipientName}。`
+                : `已将生成内容发送给 ${deliveryIntent.recipientName}。\n\n已发送内容：\n${text}`;
+              await sendMessageTypeX(client, chatId, receipt, { msgType: TypeXMessageEnum.richText, replyMsgId: payload.message_id });
+            } else {
+              const contacts = await client.searchContactsByName(deliveryIntent.recipientName).catch(() => []);
+              const resolutionHint = feeds.length > 1
+                ? `找到多个同名会话，请把收件人名字说得更完整一些。候选数量：${feeds.length}`
+                : contacts.length > 0
+                  ? "只找到了联系人，没找到可直接发送的会话，请先和对方建立会话后再试。"
+                  : `没有找到名为 ${deliveryIntent.recipientName} 的会话。`;
+              await sendMessageTypeX(client, chatId, resolutionHint, {
+                msgType: TypeXMessageEnum.richText,
+                replyMsgId: payload.message_id,
+              });
+            }
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            await sendMessageTypeX(client, chatId, `生成内容成功，但发送给 ${deliveryIntent.recipientName} 失败：${message}`, {
+              msgType: TypeXMessageEnum.richText,
+              replyMsgId: payload.message_id,
+            });
+          }
+
+          if (!targetSent) {
+            logger?.info?.(`[typex:${accountId}] delivery target not resolved for ${deliveryIntent.recipientName}`);
+          }
+        } else if (text) {
           await sendMessageTypeX(client, chatId, text, { msgType: TypeXMessageEnum.richText, replyMsgId: payload.message_id });
         }
 

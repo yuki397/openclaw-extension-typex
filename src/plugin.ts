@@ -1,10 +1,10 @@
-import type { ChannelPlugin } from "openclaw/plugin-sdk";
-import { buildChannelConfigSchema, DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-core";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { monitorTypeXProvider } from "./client/monitor.js";
 import { typexOutbound } from "./client/outbound.js";
 import { TypeXConfigSchema } from "./config-schema.js";
-import { typexOnboardingAdapter } from "./onboarding.js";
-import { typexDirectory } from "./directory.js";
+import { typexSetupWizard } from "./onboarding.js";
 
 const meta = {
   id: "openclaw-extension-typex",
@@ -15,12 +15,14 @@ const meta = {
   docsLabel: "typex",
   blurb: "TypeX bot via QR Code login.",
   order: 100,
+  showInSetup: true,
+  exposure: { setup: true, docs: true, configured: true },
 };
 
 export const typexPlugin = {
   id: "openclaw-extension-typex",
   meta,
-  onboarding: typexOnboardingAdapter,
+  setupWizard: typexSetupWizard,
   capabilities: {
     chatTypes: ["direct", "group"],
     media: true,

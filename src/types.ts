@@ -1,4 +1,4 @@
-import type { DmPolicy, GroupPolicy, MarkdownConfig, DmConfig } from "openclaw/plugin-sdk";
+import type { DmConfig, DmPolicy, GroupPolicy, MarkdownConfig } from "openclaw/plugin-sdk/config-runtime";
 
 export type TypeXGroupConfig = {
   requireMention?: boolean;

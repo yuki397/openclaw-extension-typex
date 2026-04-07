@@ -1,7 +1,7 @@
 import fs from "node:fs";
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/channel-core";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { TypeXAccountConfig } from "../types.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from 'openclaw/plugin-sdk';
 
 export type TypeXTokenSource = "config" | "file" | "env" | "none";
 
