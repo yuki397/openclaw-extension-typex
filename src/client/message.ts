@@ -29,6 +29,8 @@ import {
   TypeXMessageEnum,
   type TypeXFeedSearchEntry,
   type TypeXMessageEntry,
+  type TypeXGroupMemberEntry,
+  type TypeXMention,
 } from "./types.js";
 import fs from "node:fs";
 import path from "node:path";
@@ -56,12 +58,37 @@ type DeliveryIntent = {
   recipientName: string;
 };
 
+type GroupRecipient = {
+  userId: string;
+  name: string;
+};
+
+function stripMarkup(text: string): string {
+  return text
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p\s*>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function sanitizeRecipientName(value: string): string {
+  return stripMarkup(value)
+    .replace(/[，,。；;！？?!]+$/u, "")
+    .trim();
+}
+
 function parseDeliveryIntent(text: string): DeliveryIntent | null {
-  const match = text.match(
+  const normalizedText = stripMarkup(text);
+  const match = normalizedText.match(
     /(?:发送|发|转发)(?:消息|信息|内容)?给\s*[“"'`]?([^，“”"'`。；;！？?!\n]+?)[”"'`]?(?=\s*(?:[,，。；;！？?!\n]|内容|说|并|然后|$))/u,
   );
 
-  const recipientName = match?.[1]?.trim();
+  const recipientName = sanitizeRecipientName(match?.[1] ?? "");
   if (!recipientName) {
     return null;
   }
@@ -71,6 +98,45 @@ function parseDeliveryIntent(text: string): DeliveryIntent | null {
 
 function normalizeSearchName(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, "");
+}
+
+function pickBestGroupRecipient(name: string, members: GroupRecipient[]): GroupRecipient | null {
+  if (members.length === 0) {
+    return null;
+  }
+
+  const normalizedNeedle = normalizeSearchName(name);
+  const exactMatch = members.find((member) => normalizeSearchName(member.name) === normalizedNeedle);
+  if (exactMatch) {
+    return exactMatch;
+  }
+
+  const partialMatches = members.filter((member) => normalizeSearchName(member.name).includes(normalizedNeedle));
+  if (partialMatches.length === 1) {
+    return partialMatches[0];
+  }
+
+  if (members.length === 1) {
+    return members[0];
+  }
+
+  return null;
+}
+
+function resolveMentionRecipient(
+  mentions: TypeXMention[] | undefined,
+  botId: string,
+  recipientName: string,
+): GroupRecipient | null {
+  const otherMentions = (mentions ?? [])
+    .filter((mention) => mention.id.open_id !== botId && mention.id.user_id !== botId)
+    .map((mention) => ({
+      userId: mention.id.user_id ?? mention.id.open_id ?? "",
+      name: mention.name ?? mention.id.user_id ?? mention.id.open_id ?? "",
+    }))
+    .filter((mention) => mention.userId && mention.name);
+
+  return pickBestGroupRecipient(recipientName, otherMentions);
 }
 
 function pickBestFeedMatch(name: string, feeds: TypeXFeedSearchEntry[]): TypeXFeedSearchEntry | null {
@@ -471,6 +537,41 @@ export async function processTypeXMessage(
         if (text && deliveryIntent) {
           let targetSent = false;
           try {
+            if (isGroup && client.mode === "bot") {
+              const mentionRecipient = resolveMentionRecipient(payload.mentions, appId, deliveryIntent.recipientName);
+              const groupMembers = mentionRecipient
+                ? []
+                : await client.listGroupMembers(chatId).catch(() => []);
+              const memberRecipient =
+                mentionRecipient ??
+                pickBestGroupRecipient(
+                  deliveryIntent.recipientName,
+                  groupMembers.map((member: TypeXGroupMemberEntry) => ({
+                    userId: member.user_id,
+                    name: member.name ?? member.user_id,
+                  })),
+                );
+
+              if (memberRecipient) {
+                const groupText = `@${memberRecipient.name} ${text}`.trim();
+                await sendMessageTypeX(client, chatId, groupText, {
+                  msgType: TypeXMessageEnum.text,
+                  replyMsgId: payload.message_id,
+                });
+                targetSent = true;
+                return;
+              }
+
+              const groupHint = groupMembers.length > 1
+                ? `在当前群里找到多个接近 "${deliveryIntent.recipientName}" 的成员，请直接 @ 对方，或把名字说得更完整一些。`
+                : `在当前群里没有找到名为 ${deliveryIntent.recipientName} 的成员，请直接 @ 对方后再试。`;
+              await sendMessageTypeX(client, chatId, groupHint, {
+                msgType: TypeXMessageEnum.text,
+                replyMsgId: payload.message_id,
+              });
+              return;
+            }
+
             const feeds = await client.searchFeedsByName(deliveryIntent.recipientName);
             const bestFeed = pickBestFeedMatch(deliveryIntent.recipientName, feeds);
 
@@ -484,10 +585,30 @@ export async function processTypeXMessage(
               await sendMessageTypeX(client, chatId, receipt, { msgType: TypeXMessageEnum.richText, replyMsgId: payload.message_id });
             } else {
               const contacts = await client.searchContactsByName(deliveryIntent.recipientName).catch(() => []);
+              const bestContact = contacts.length === 1 ? contacts[0] : null;
+              if (bestContact?.friend_id) {
+                await sendMessageTypeX(client, bestContact.friend_id, text, {
+                  msgType: TypeXMessageEnum.text,
+                  receiverId: bestContact.friend_id,
+                });
+                targetSent = true;
+
+                const receipt = isGroup
+                  ? `已将生成内容发送给 ${deliveryIntent.recipientName}。`
+                  : `已将生成内容发送给 ${deliveryIntent.recipientName}。\n\n已发送内容：\n${text}`;
+                await sendMessageTypeX(client, chatId, receipt, {
+                  msgType: TypeXMessageEnum.richText,
+                  replyMsgId: payload.message_id,
+                });
+                return;
+              }
+
               const resolutionHint = feeds.length > 1
                 ? `找到多个同名会话，请把收件人名字说得更完整一些。候选数量：${feeds.length}`
                 : contacts.length > 0
-                  ? "只找到了联系人，没找到可直接发送的会话，请先和对方建立会话后再试。"
+                  ? contacts.length > 1
+                    ? `找到多个同名联系人，请把收件人名字说得更完整一些。候选数量：${contacts.length}`
+                    : "找到了联系人，但发送仍未成功，请确认登录态和收件人信息后重试。"
                   : `没有找到名为 ${deliveryIntent.recipientName} 的会话。`;
               await sendMessageTypeX(client, chatId, resolutionHint, {
                 msgType: TypeXMessageEnum.richText,

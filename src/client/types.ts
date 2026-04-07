@@ -85,3 +85,11 @@ export interface TypeXContactSearchEntry {
   friend_id: string;
   name?: string;
 }
+
+export interface TypeXGroupMemberEntry {
+  user_id: string;
+  name?: string;
+  avatar?: string;
+  member_role?: number;
+  joined_at?: number;
+}

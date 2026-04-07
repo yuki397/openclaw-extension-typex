@@ -148,3 +148,54 @@ string
 响应
 - 成功: 直接返回文件流数据，Content-Type 根据原文件类型而定。
 - 失败: 若权限不足或文件不存在，将返回相应 HTTP 状态码或 JSON 错误格式。
+
+发送消息
+以 OpenClaw 助手身份向登录用户发送消息。所有接口均需在 Header 中携带有效的 Cookie: sessionid=... 进行鉴权。
+- URL: /open/claw/send_message
+- Method: POST
+- Auth: Cookie Session (check_auth 返回的 sessionid)
+- Content-Type: application/json
+Header
+Cookie: sessionid=<session_id>
+请求体
+字段
+类型
+描述
+msg_type
+int
+消息类型 (0: 文本)
+content
+object
+消息内容对象 (见下文)
+is_delegate
+bool
+可选，是否代发
+receiver_id
+string
+可选，向指定好友发消息
+chat_id
+string
+可选，向指定会话发消息
+content 结构示例 (文本/富文本 - msg_type: 0/1)
+{
+  "text": "这是一条测试消息"
+}
+content 结构示例 (图片 - msg_type: 2)
+{
+  "object_url": "s3_object_key_or_url",
+  "thumb_url": "s3_object_key_or_url_for_thumb",
+  "width": 1920,
+  "height": 1080
+}
+
+
+cURL 示例
+curl -X POST http://localhost:8080/open/claw/send_message \
+  -H "Cookie: sessionid=..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "msg_type": 0,
+    "content": {
+        "text": "您好，来自 OpenClaw 的消息！"
+    }
+  }'

@@ -5,10 +5,16 @@ import {
   type TypeXClientOptions,
   type TypeXContactSearchEntry,
   type TypeXFeedSearchEntry,
+  type TypeXGroupMemberEntry,
   type TypeXMessageEntry,
 } from "./types.js";
 
 let prompter: WizardPrompter | undefined;
+
+function isSessionAuthFailure(status: number, bodyText: string, resJson?: { code?: number; msg?: string; message?: string }) {
+  const combined = `${bodyText} ${resJson?.msg ?? ""} ${resJson?.message ?? ""}`.toLowerCase();
+  return status === 401 || combined.includes("session auth error");
+}
 
 export class TypeXClient {
   private options: TypeXClientOptions;
@@ -56,10 +62,16 @@ export class TypeXClient {
     try {
       resJson = JSON.parse(bodyText);
     } catch {
+      if (isSessionAuthFailure(response.status, bodyText)) {
+        throw new Error("TypeX 用户登录态已失效，请在 OpenClaw 中重新扫码登录 TypeX user 账号后再试。");
+      }
       throw new Error(`TypeX API ${endpoint} returned invalid JSON: HTTP ${response.status} - ${bodyText}`);
     }
 
     if (!response.ok || resJson.code !== 0) {
+      if (isSessionAuthFailure(response.status, bodyText, resJson)) {
+        throw new Error("TypeX 用户登录态已失效，请在 OpenClaw 中重新扫码登录 TypeX user 账号后再试。");
+      }
       throw new Error(
         `TypeX API ${endpoint} failed: [${resJson.code ?? response.status}] ${resJson.msg || resJson.message || "unknown error"}`,
       );
@@ -108,7 +120,12 @@ export class TypeXClient {
    * @param to  chat_id to send to
    * @param content  message text or object
    */
-  async sendMessage(to: string, content: string | object, msgType: TypeXMessageEnum = 0, options: { replyMsgId?: string } = {}) {
+  async sendMessage(
+    to: string,
+    content: string | object,
+    msgType: TypeXMessageEnum = 0,
+    options: { replyMsgId?: string; receiverId?: string } = {},
+  ) {
     if (!this.accessToken) throw new Error("TypeXClient: Not authenticated.");
 
     let finalContent = content;
@@ -146,8 +163,12 @@ export class TypeXClient {
       });
     } else {
       payloadStr = JSON.stringify({
-        chat_id: to,
-        content: { text: finalContent },
+        chat_id: options.receiverId ? undefined : to,
+        receiver_id: options.receiverId,
+        content:
+          typeof finalContent === "string"
+            ? { text: finalContent }
+            : finalContent,
         msg_type: msgType,
       });
     }
@@ -163,10 +184,16 @@ export class TypeXClient {
     try {
       resJson = JSON.parse(bodyText);
     } catch (e) {
+      if (isSessionAuthFailure(response.status, bodyText)) {
+        throw new Error("TypeX 用户登录态已失效，请在 OpenClaw 中重新扫码登录 TypeX user 账号后再试。");
+      }
       throw new Error(`Send message failed (invalid JSON): HTTP ${response.status} - ${bodyText}`);
     }
 
     if (resJson.code !== 0) {
+      if (isSessionAuthFailure(response.status, bodyText, resJson)) {
+        throw new Error("TypeX 用户登录态已失效，请在 OpenClaw 中重新扫码登录 TypeX user 账号后再试。");
+      }
       throw new Error(`Send message failed: [${resJson.code}] ${resJson.msg || resJson.message}`);
     }
     return resJson.data || { message_id: `msg_${Date.now()}` };
@@ -180,6 +207,11 @@ export class TypeXClient {
   async searchContactsByName(name: string): Promise<TypeXContactSearchEntry[]> {
     if (!name.trim()) return [];
     return this.postJson<TypeXContactSearchEntry[]>("/open/claw/contacts_by_name", { name });
+  }
+
+  async listGroupMembers(chatId: string): Promise<TypeXGroupMemberEntry[]> {
+    if (!chatId.trim() || this.mode !== "bot") return [];
+    return this.postJson<TypeXGroupMemberEntry[]>("/open/robot/group_members", { chatid: chatId });
   }
 
   /**
@@ -213,7 +245,6 @@ export class TypeXClient {
       method: "POST",
       headers: {
         Authorization: `Bearer ${this.accessToken}`,
-        "x-developer": "ryan"
         // Note: fetch will automatically set the Content-Type boundary
       },
       body: formData,
@@ -241,7 +272,7 @@ export class TypeXClient {
     try {
       const response = await fetch(`${TYPEX_DOMAIN}/open/claw/message`, {
         method: "POST",
-        headers: { Cookie: this.accessToken, "Content-Type": "application/json", 'x-developer': 'ryan' },
+        headers: { Cookie: this.accessToken, "Content-Type": "application/json" },
         body: JSON.stringify({ pos }),
       });
       const resJson = await response.json();
@@ -262,7 +293,7 @@ export class TypeXClient {
     try {
       const response = await fetch(`${TYPEX_DOMAIN}/open/robot/message/pull`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${this.accessToken}`, "Content-Type": "application/json", 'x-developer': 'ryan' },
+        headers: { Authorization: `Bearer ${this.accessToken}`, "Content-Type": "application/json" },
         body: JSON.stringify({ limit: 5 }),
       });
       const resJson = await response.json();
@@ -284,7 +315,7 @@ export class TypeXClient {
       const response = await fetch(`${TYPEX_DOMAIN}/open/claw/message/${messageId}`, {
         method: "GET",
         headers: isBot
-          ? { Authorization: `Bearer ${this.accessToken}`, "Content-Type": "application/json", 'x-developer': 'ryan' }
+          ? { Authorization: `Bearer ${this.accessToken}`, "Content-Type": "application/json" }
           : { Cookie: this.accessToken, "Content-Type": "application/json" },
       });
       const resJson = await response.json();
@@ -307,7 +338,7 @@ export class TypeXClient {
 
       const response = await fetch(url, {
         method: "GET",
-        headers: { Authorization: `Bearer ${this.accessToken}`, 'x-developer': 'ryan' },
+        headers: { Authorization: `Bearer ${this.accessToken}` },
       });
 
       if (!response.ok) {
@@ -386,7 +417,7 @@ export class TypeXClient {
     try {
       const response = await fetch(`${TYPEX_DOMAIN}/open/claw/group_members`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${this.accessToken}`, "Content-Type": "application/json", 'x-developer': 'ryan' },
+        headers: { Authorization: `Bearer ${this.accessToken}`, "Content-Type": "application/json" },
         body: JSON.stringify({ name }),
       });
       const resJson = await response.json();

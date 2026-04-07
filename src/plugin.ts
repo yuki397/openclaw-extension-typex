@@ -47,9 +47,9 @@ export const typexPlugin = {
     targetResolver: {
       looksLikeId: (raw) => {
         const trimmed = raw.trim();
-        return /^\d+$/.test(trimmed);
+        return /^(?:\d+|user:\d+|chat:\d+|group:\d+)$/i.test(trimmed);
       },
-      hint: "<chat_id>",
+      hint: "<chat_id | user:id | chat:id>",
     },
   },
 

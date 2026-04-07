@@ -6,6 +6,7 @@ export type TypeXSendOpts = {
   mediaUrl?: string;
   maxBytes?: number;
   replyMsgId?: string;
+  receiverId?: string;
 };
 
 /**
@@ -88,6 +89,9 @@ export async function sendMessageTypeX(
     }
   }
 
-  const res = await client.sendMessage(chatId, finalContent, msgType, { replyMsgId: opts.replyMsgId });
+  const res = await client.sendMessage(chatId, finalContent, msgType, {
+    replyMsgId: opts.replyMsgId,
+    receiverId: opts.receiverId,
+  });
   return res;
 }
