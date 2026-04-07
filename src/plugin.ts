@@ -2,6 +2,7 @@ import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-core";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { monitorTypeXProvider } from "./client/monitor.js";
+import { typexDirectory } from "./directory.js";
 import { typexOutbound } from "./client/outbound.js";
 import { TypeXConfigSchema } from "./config-schema.js";
 import { typexSetupWizard } from "./onboarding.js";

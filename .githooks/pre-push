@@ -1,3 +1,15 @@
 #!/bin/sh
 
-node scripts/verify-typex-domain.mjs
+should_check_main=0
+
+while read -r local_ref local_sha remote_ref remote_sha
+do
+  if [ "$local_ref" = "refs/heads/main" ] || [ "$remote_ref" = "refs/heads/main" ]; then
+    should_check_main=1
+    break
+  fi
+done
+
+if [ "$should_check_main" -eq 1 ]; then
+  node scripts/verify-typex-domain.mjs
+fi
