@@ -15,6 +15,25 @@ type ResolvedGroupMember = {
   name: string;
 };
 
+type ExecuteTypeXSendByNameParams = {
+  cfg?: OpenClawConfig;
+  recipient: string;
+  message?: string;
+  mediaPath?: string;
+  mediaPaths?: string[];
+  accountId?: string | null;
+};
+
+type ExecuteTypeXSendInGroupParams = {
+  cfg?: OpenClawConfig;
+  chatId: string;
+  memberName: string;
+  message?: string;
+  mediaPath?: string;
+  mediaPaths?: string[];
+  accountId?: string | null;
+};
+
 const TYPEX_IMAGE_SEND_MSG_TYPE = 2 as TypeXMessageEnum;
 
 const TYPEX_SEND_BY_NAME_SCHEMA = {
@@ -57,13 +76,38 @@ function resolveTypeXClient(cfg: OpenClawConfig | undefined, accountId?: string 
   return { client, accountId: resolvedAccountId };
 }
 
-function pickUniqueByName<T extends { name?: string }>(items: T[], query: string): T[] {
+function dedupeByKey<T>(items: T[], getKey: (item: T) => string): T[] {
+  const seen = new Set<string>();
+  const result: T[] = [];
+  for (const item of items) {
+    const key = getKey(item).trim();
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(item);
+  }
+  return result;
+}
+
+function filterMembersByName<T extends { name?: string }>(items: T[], query: string): T[] {
   const normalizedQuery = normalizeName(query);
   const exact = items.filter((item) => normalizeName(item.name) === normalizedQuery);
   if (exact.length > 0) {
     return exact;
   }
   return items.filter((item) => normalizeName(item.name).includes(normalizedQuery));
+}
+
+function filterMembersMentionedInSentence<T extends { name?: string }>(items: T[], sentence: string): T[] {
+  const normalizedSentence = normalizeName(sentence);
+  if (!normalizedSentence) {
+    return [];
+  }
+  return items.filter((item) => {
+    const normalizedMemberName = normalizeName(item.name);
+    return normalizedMemberName.length > 0 && normalizedSentence.includes(normalizedMemberName);
+  });
 }
 
 async function resolvePeerTargetByName(params: {
@@ -76,49 +120,62 @@ async function resolvePeerTargetByName(params: {
     throw new Error("typex_send_by_name 需要使用 TypeX user 账号。");
   }
 
-  const [feeds, contacts] = await Promise.all([
-    client.searchFeedsByName(params.recipient),
-    client.searchContactsByName(params.recipient),
-  ]);
+  const contacts = await client.searchContactsByName(params.recipient);
+  const uniqueMatchingContacts = dedupeByKey(
+    contacts
+      .map((contact) => ({
+        friendId: String(contact.friend_id ?? ""),
+        name: String(contact.name ?? contact.friend_id ?? ""),
+      }))
+      .filter((entry) => entry.friendId),
+    (entry) => entry.friendId,
+  );
+  console.log(
+    `[TypeX tool] resolvePeerTargetByName recipient=${JSON.stringify(params.recipient)} contacts=${uniqueMatchingContacts.length}`,
+  );
 
-  const matchingFeeds = pickUniqueByName(
-    feeds.map((feed) => ({
-      chatId: String(feed.chat_id ?? ""),
-      name: String(feed.name ?? feed.chat_id ?? ""),
-    })),
-    params.recipient,
-  ).filter((entry) => entry.chatId);
-
-  if (matchingFeeds.length === 1) {
-    return {
-      kind: "chat",
-      id: matchingFeeds[0].chatId,
-      name: matchingFeeds[0].name,
-      matchedBy: "feed",
-    };
-  }
-  if (matchingFeeds.length > 1) {
-    throw new Error(`找到多个名为 ${params.recipient} 的会话，请说得更具体一点。`);
-  }
-
-  const matchingContacts = pickUniqueByName(
-    contacts.map((contact) => ({
-      friendId: String(contact.friend_id ?? ""),
-      name: String(contact.name ?? contact.friend_id ?? ""),
-    })),
-    params.recipient,
-  ).filter((entry) => entry.friendId);
-
-  if (matchingContacts.length === 1) {
+  if (uniqueMatchingContacts.length === 1) {
     return {
       kind: "user",
-      id: matchingContacts[0].friendId,
-      name: matchingContacts[0].name,
+      id: uniqueMatchingContacts[0].friendId,
+      name: uniqueMatchingContacts[0].name,
       matchedBy: "contact",
     };
   }
-  if (matchingContacts.length > 1) {
+  if (uniqueMatchingContacts.length > 1) {
+    console.log(
+      `[TypeX tool] ambiguous contact matches recipient=${JSON.stringify(params.recipient)} matches=${JSON.stringify(uniqueMatchingContacts)}`,
+    );
     throw new Error(`找到多个名为 ${params.recipient} 的联系人，请说得更具体一点。`);
+  }
+
+  const feeds = await client.searchFeedsByName(params.recipient);
+  const uniqueMatchingFeeds = dedupeByKey(
+    feeds
+      .map((feed) => ({
+        chatId: String(feed.chat_id ?? ""),
+        name: String(feed.name ?? feed.chat_id ?? ""),
+      }))
+      .filter((entry) => entry.chatId),
+    (entry) => entry.chatId,
+  );
+  console.log(
+    `[TypeX tool] resolvePeerTargetByName recipient=${JSON.stringify(params.recipient)} feeds=${uniqueMatchingFeeds.length}`,
+  );
+
+  if (uniqueMatchingFeeds.length === 1) {
+    return {
+      kind: "chat",
+      id: uniqueMatchingFeeds[0].chatId,
+      name: uniqueMatchingFeeds[0].name,
+      matchedBy: "feed",
+    };
+  }
+  if (uniqueMatchingFeeds.length > 1) {
+    console.log(
+      `[TypeX tool] ambiguous feed matches recipient=${JSON.stringify(params.recipient)} matches=${JSON.stringify(uniqueMatchingFeeds)}`,
+    );
+    throw new Error(`找到多个名为 ${params.recipient} 的会话，请说得更具体一点。`);
   }
 
   throw new Error(`没有找到名为 ${params.recipient} 的会话或联系人。`);
@@ -173,12 +230,117 @@ function formatToolTextResult(text: string, details: Record<string, unknown>) {
   };
 }
 
+export async function executeTypeXSendByName(params: ExecuteTypeXSendByNameParams) {
+  const recipient = String(params.recipient ?? "").trim();
+  const message = String(params.message ?? "").trim();
+  const mediaPaths = [
+    ...((params.mediaPaths ?? []).map((entry) => String(entry ?? "").trim()).filter(Boolean)),
+    ...([params.mediaPath].map((entry) => String(entry ?? "").trim()).filter(Boolean)),
+  ];
+
+  if (!recipient) {
+    throw new Error("recipient 不能为空。");
+  }
+  if (!message && mediaPaths.length === 0) {
+    throw new Error("message 和 mediaPath 至少要提供一个。");
+  }
+
+  const target = await resolvePeerTargetByName({
+    cfg: params.cfg,
+    recipient,
+    accountId: params.accountId,
+  });
+  const { client, accountId } = resolveTypeXClient(params.cfg, params.accountId);
+  const sent: string[] = [];
+
+  for (const mediaPath of mediaPaths) {
+    if (target.kind !== "chat") {
+      throw new Error("按联系人直发图片/文件需要已有会话 chat_id；当前只找到了联系人，没有可上传资源的会话。");
+    }
+    const uploaded = await buildUploadedMediaPayload({
+      cfg: params.cfg,
+      accountId,
+      chatId: target.id,
+      mediaPath,
+    });
+    await client.sendDelegatedChatMessage(target.id, uploaded.content, uploaded.msgType);
+    sent.push(uploaded.kindLabel);
+  }
+
+  if (message) {
+    if (target.kind === "chat") {
+      await client.sendDelegatedChatMessage(target.id, { text: message }, TypeXMessageEnum.text);
+    } else {
+      await client.sendDelegatedContactMessage(target.id, { text: message }, TypeXMessageEnum.text);
+    }
+    sent.push("text");
+  }
+
+  return {
+    target,
+    sent,
+  };
+}
+
+export async function executeTypeXSendInGroup(params: ExecuteTypeXSendInGroupParams) {
+  const rawChatId = String(params.chatId ?? "").trim();
+  const memberName = String(params.memberName ?? "").trim();
+  const message = String(params.message ?? "").trim();
+  const mediaPaths = [
+    ...((params.mediaPaths ?? []).map((entry) => String(entry ?? "").trim()).filter(Boolean)),
+    ...([params.mediaPath].map((entry) => String(entry ?? "").trim()).filter(Boolean)),
+  ];
+
+  if (!rawChatId || !memberName) {
+    throw new Error("chatId 和 memberName 不能为空。");
+  }
+  if (!message && mediaPaths.length === 0) {
+    throw new Error("message 和 mediaPath 至少要提供一个。");
+  }
+
+  const chatId = normalizeChatId(rawChatId);
+  const member = await resolveGroupMemberByName({
+    cfg: params.cfg,
+    chatId,
+    memberName,
+    accountId: params.accountId,
+  });
+  const { client, accountId } = resolveTypeXClient(params.cfg, params.accountId);
+  const sent: string[] = [];
+
+  for (const mediaPath of mediaPaths) {
+    const uploaded = await buildUploadedMediaPayload({
+      cfg: params.cfg,
+      accountId,
+      chatId,
+      mediaPath,
+    });
+    await client.sendBotGroupMessage(chatId, uploaded.content, uploaded.msgType, {
+      atUserIds: [member.id],
+    });
+    sent.push(uploaded.kindLabel);
+  }
+
+  if (message) {
+    await client.sendBotGroupMessage(chatId, message, TypeXMessageEnum.text, {
+      atUserIds: [member.id],
+    });
+    sent.push("text");
+  }
+
+  return {
+    chatId,
+    member,
+    sent,
+  };
+}
+
 export function createTypeXSendByNameTool(params: { cfg?: OpenClawConfig }): ChannelAgentTool {
   return {
     label: "TypeX Send By Name",
     name: "typex_send_by_name",
     description:
-      "在 TypeX 中按名称查找会话或联系人，并以当前登录的 user 身份代发文本或本地图片/文件。",
+      "当用户在 TypeX 单聊里明确要求“发给某人/转给某人”时，用这个工具。它会按名字查找 TypeX 会话或联系人，并以当前登录的 user 身份代发文本或本地图片/文件。",
     parameters: TYPEX_SEND_BY_NAME_SCHEMA as any,
     execute: async (_toolCallId, rawArgs) => {
       const args = rawArgs as {
@@ -199,37 +361,13 @@ export function createTypeXSendByNameTool(params: { cfg?: OpenClawConfig }): Cha
       console.log(
         `[TypeX tool] typex_send_by_name recipient=${JSON.stringify(recipient)} hasMessage=${message ? "1" : "0"} mediaPath=${JSON.stringify(mediaPath)}`,
       );
-
-      const target = await resolvePeerTargetByName({
+      const { target, sent } = await executeTypeXSendByName({
         cfg: params.cfg,
         recipient,
+        message,
+        mediaPath,
         accountId: args.accountId,
       });
-      const { client, accountId } = resolveTypeXClient(params.cfg, args.accountId);
-
-      const sent: string[] = [];
-      if (mediaPath) {
-        if (target.kind !== "chat") {
-          throw new Error("按联系人直发图片/文件需要已有会话 chat_id；当前只找到了联系人，没有可上传资源的会话。");
-        }
-        const uploaded = await buildUploadedMediaPayload({
-          cfg: params.cfg,
-          accountId,
-          chatId: target.id,
-          mediaPath,
-        });
-        await client.sendDelegatedChatMessage(target.id, uploaded.content, uploaded.msgType);
-        sent.push(uploaded.kindLabel);
-      }
-
-      if (message) {
-        if (target.kind === "chat") {
-          await client.sendDelegatedChatMessage(target.id, { text: message }, TypeXMessageEnum.text);
-        } else {
-          await client.sendDelegatedContactMessage(target.id, { text: message }, TypeXMessageEnum.text);
-        }
-        sent.push("text");
-      }
 
       return formatToolTextResult(
         `已向 ${target.name || recipient} 发送 ${sent.join(" + ")}。`,
@@ -257,14 +395,22 @@ async function resolveGroupMemberByName(params: {
   if (client.mode !== "bot") {
     throw new Error("typex_send_in_group 需要使用 TypeX bot 账号。");
   }
-  const members = await client.listGroupMembers(params.chatId);
-  const matches = pickUniqueByName(
-    members.map((member) => ({
-      id: String(member.user_id ?? ""),
-      name: String(member.name ?? member.user_id ?? ""),
-    })),
-    params.memberName,
-  ).filter((entry) => entry.id);
+  const members = dedupeByKey(
+    (await client.listGroupMembers(params.chatId))
+      .map((member) => ({
+        id: String(member.user_id ?? ""),
+        name: String(member.name ?? member.user_id ?? ""),
+      }))
+      .filter((entry) => entry.id),
+    (entry) => entry.id,
+  );
+  const directMatches = filterMembersByName(members, params.memberName).filter((entry: { id: string; name: string }) => entry.id);
+  const matches = directMatches.length > 0
+    ? directMatches
+    : filterMembersMentionedInSentence(members, params.memberName).filter((entry: { id: string; name: string }) => entry.id);
+  console.log(
+    `[TypeX tool] resolveGroupMemberByName memberName=${JSON.stringify(params.memberName)} directMatches=${directMatches.length} sentenceMatches=${matches.length}`,
+  );
 
   if (matches.length === 1) {
     return matches[0];
@@ -280,7 +426,7 @@ export function createTypeXSendInGroupTool(params: { cfg?: OpenClawConfig }): Ch
     label: "TypeX Send In Group",
     name: "typex_send_in_group",
     description:
-      "在当前 TypeX 群里查找成员，并以 bot 身份在该群中 @ 对方发送文本或本地图片/文件。",
+      "当用户在 TypeX 群聊里要求 bot 给某个群成员发消息时，用这个工具。它会在当前群里按名字找成员，并以 bot 身份在该群中 @ 对方发送文本或本地图片/文件。",
     parameters: TYPEX_SEND_IN_GROUP_SCHEMA as any,
     execute: async (_toolCallId, rawArgs) => {
       const args = rawArgs as {
@@ -303,36 +449,14 @@ export function createTypeXSendInGroupTool(params: { cfg?: OpenClawConfig }): Ch
       console.log(
         `[TypeX tool] typex_send_in_group chatId=${JSON.stringify(rawChatId)} memberName=${JSON.stringify(memberName)} hasMessage=${message ? "1" : "0"} mediaPath=${JSON.stringify(mediaPath)}`,
       );
-
-      const chatId = normalizeChatId(rawChatId);
-      const member = await resolveGroupMemberByName({
+      const { chatId, member, sent } = await executeTypeXSendInGroup({
         cfg: params.cfg,
-        chatId,
+        chatId: rawChatId,
         memberName,
+        message,
+        mediaPath,
         accountId: args.accountId,
       });
-      const { client, accountId } = resolveTypeXClient(params.cfg, args.accountId);
-      const sent: string[] = [];
-
-      if (mediaPath) {
-        const uploaded = await buildUploadedMediaPayload({
-          cfg: params.cfg,
-          accountId,
-          chatId,
-          mediaPath,
-        });
-        await client.sendBotGroupMessage(chatId, uploaded.content, uploaded.msgType, {
-          atUserIds: [member.id],
-        });
-        sent.push(uploaded.kindLabel);
-      }
-
-      if (message) {
-        await client.sendBotGroupMessage(chatId, message, TypeXMessageEnum.text, {
-          atUserIds: [member.id],
-        });
-        sent.push("text");
-      }
 
       return formatToolTextResult(
         `已在群 ${chatId} 中发送给 ${member.name || memberName}：${sent.join(" + ")}。`,

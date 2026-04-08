@@ -74,7 +74,11 @@ export class TypeXClient {
   }
 
   private async postJson<T>(endpoint: string, payload: unknown): Promise<T> {
-    if (endpoint === "/open/claw/feeds_by_name" || endpoint === "/open/claw/contacts_by_name") {
+    if (
+      endpoint === "/open/claw/feeds_by_name" ||
+      endpoint === "/open/claw/contacts_by_name" ||
+      endpoint === "/open/robot/group_members"
+    ) {
       const headers = this.getAuthHeaders({ "Content-Type": "application/json" });
       const curlParts = [`curl -X POST ${shellEscapeSingleQuoted(`${TYPEX_DOMAIN}${endpoint}`)}`];
 
@@ -319,7 +323,16 @@ export class TypeXClient {
 
   async listGroupMembers(chatId: string): Promise<TypeXGroupMemberEntry[]> {
     if (!chatId.trim() || this.mode !== "bot") return [];
-    return this.postJson<TypeXGroupMemberEntry[]>("/open/robot/group_members", { chatid: chatId });
+    const result = await this.postJson<TypeXGroupMemberEntry[]>("/open/robot/group_members", { chatid: chatId });
+    console.log(
+      `[TypeX debug] /open/robot/group_members response members=${JSON.stringify(
+        result.map((member) => ({
+          user_id: member.user_id,
+          name: member.name,
+        })),
+      )}`,
+    );
+    return result;
   }
 
   /**

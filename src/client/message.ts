@@ -25,8 +25,10 @@ import {
 } from "./message-helpers.js";
 import { getTypeXRuntime } from "./runtime.js";
 import { sendMessageTypeX } from "./send.js";
+import { executeTypeXSendByName, executeTypeXSendInGroup } from "../agent-tools-send.js";
 import {
   TypeXMessageEnum,
+  type TypeXMention,
   type TypeXMessageEntry,
 } from "./types.js";
 import fs from "node:fs";
@@ -50,6 +52,135 @@ export type ProcessTypeXMessageOptions = {
 export { buildAgentBody, checkBotMentioned, normalizeMessageToText, stripBotMention } from "./message-helpers.js";
 
 const CHANNEL_ID = "openclaw-extension-typex";
+
+type ExplicitSendIntent =
+  | {
+    kind: "dm-send-by-name";
+    recipient: string;
+    includeGeneratedText: boolean;
+    includeAttachments: boolean;
+  }
+  | {
+    kind: "group-send-in-group";
+    memberName: string;
+    includeGeneratedText: boolean;
+    includeAttachments: boolean;
+  };
+
+function cleanupRecipient(value: string): string {
+  return value
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[，。！？!?,；;:：]+$/g, "")
+    .replace(/<\/?[a-z][^>]*$/i, "")
+    .replace(/(?:<\/?(?:p|li|ul|ol|span|div|br)[^>]*)+$/gi, "")
+    .replace(/^(给|到)/, "")
+    .replace(/(吗|吧|呀|啊)$/g, "")
+    .trim();
+}
+
+function normalizeIntentSource(value: string): string {
+  return value
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function shouldIncludeGeneratedTextForExplicitSend(text: string) {
+  return /(生成|写|整理|总结|编|拟|回复|文案|消息|内容|代码|祝福|介绍|说明)/.test(text);
+}
+
+function shouldIncludeAttachmentsForExplicitSend(text: string, attachmentPaths: string[]) {
+  if (attachmentPaths.length === 0) {
+    return false;
+  }
+  return /(图|图片|照片|附件|文件|发这张|把这张|这个文件|这个附件)/.test(text);
+}
+
+function resolveMentionTargetName(mentions: TypeXMention[] | undefined, appId: string, fallbackToken: string) {
+  const visibleMentions = (mentions ?? []).filter((mention) => {
+    const userId = mention.id?.user_id ?? mention.id?.open_id ?? "";
+    return userId && userId !== appId;
+  });
+  if (visibleMentions.length === 1) {
+    return visibleMentions[0].name?.trim() || fallbackToken;
+  }
+  return fallbackToken;
+}
+
+function detectExplicitSendIntent(params: {
+  text: string;
+  isGroup: boolean;
+  attachmentPaths: string[];
+  mentions?: TypeXMention[];
+  appId: string;
+}): ExplicitSendIntent | null {
+  const source = normalizeIntentSource(params.text);
+  if (!source) {
+    return null;
+  }
+
+  const includeGeneratedText =
+    params.attachmentPaths.length === 0 ||
+    shouldIncludeGeneratedTextForExplicitSend(source);
+  const includeAttachments = shouldIncludeAttachmentsForExplicitSend(source, params.attachmentPaths);
+  const sendPatterns = [
+    /(?:帮我|麻烦你|请你|你帮我|你帮忙)?(?:把)?(?:.*?)(?:发给|发送给|转给|转发给|代发给)\s*([^\n，。！？!?,；;]+)/,
+    /(?:帮我|麻烦你|请你|你帮我|你帮忙)?发(?:一条消息|个消息|消息|一句话|一段话|一下)?给\s*([^\n，。！？!?,；;]+)/,
+    /(?:帮我|麻烦你|请你|你帮我|你帮忙)?发.+?给\s*([^\n，。！？!?,；;]+)/,
+    /(?:帮我|麻烦你|请你|你帮我|你帮忙)?把(?:.+?)(?:发|发送|转发)给\s*([^\n，。！？!?,；;]+)/,
+  ];
+  const sendMatch = sendPatterns
+    .map((pattern) => source.match(pattern))
+    .find((match) => Boolean(match?.[1]));
+  if (sendMatch?.[1]) {
+    const rawRecipient = cleanupRecipient(sendMatch[1]);
+    if (!rawRecipient) {
+      return null;
+    }
+
+    if (params.isGroup) {
+      const pronounTarget = /^(他|她|它|TA|ta|对方)$/.test(rawRecipient)
+        ? resolveMentionTargetName(params.mentions, params.appId, rawRecipient)
+        : rawRecipient;
+      return {
+        kind: "group-send-in-group",
+        memberName: pronounTarget,
+        includeGeneratedText,
+        includeAttachments,
+      };
+    }
+
+    return {
+      kind: "dm-send-by-name",
+      recipient: rawRecipient,
+      includeGeneratedText,
+      includeAttachments,
+    };
+  }
+
+  if (params.isGroup) {
+    const hasTellIntent =
+      source.includes("告诉") ||
+      /跟.+?(?:说|讲)/.test(source) ||
+      /对.+?(?:说|讲)/.test(source) ||
+      /让.+?知道/.test(source);
+    if (!hasTellIntent) {
+      return null;
+    }
+    return {
+      kind: "group-send-in-group",
+      memberName: source,
+      includeGeneratedText: true,
+      includeAttachments,
+    };
+  }
+
+  return null;
+}
 
 export async function processTypeXMessage(
   client: TypeXClient,
@@ -102,10 +233,12 @@ export async function processTypeXMessage(
   const chatId = payload.chat_id;
   const senderId = payload.sender_id;
   const senderName = payload.sender_name ?? senderId;
-  const isGroup = payload.chat_type === "group";
+  const isGroup = payload.chat_type === "group" || client.mode === "bot";
   const rawText = normalizeMessageToText(payload);
 
-  logger?.info(`[typex:${accountId}] ${isGroup ? "group" : "DM"} message from ${senderId} in ${chatId}`);
+  logger?.info(
+    `[typex:${accountId}] ${isGroup ? "group" : "DM"} message from ${senderId} in ${chatId} (chat_type=${payload.chat_type ?? "unknown"} mode=${client.mode})`,
+  );
 
   if (!rawText.trim()) {
     logger?.info(`[typex:${accountId}] skipping empty/system message`);
@@ -298,6 +431,19 @@ export async function processTypeXMessage(
     ? `${cleanText}\n\n[TypeX attachments saved locally]\n${attachmentPaths.map(p => `- ${p}`).join("\n")}`
     : cleanText;
   const contentForAgent = cleanTextWithAttachments;
+  const explicitSendIntent = detectExplicitSendIntent({
+    text: cleanText,
+    isGroup,
+    attachmentPaths,
+    mentions: payload.mentions,
+    appId,
+  });
+  logger?.info(
+    `[typex:${accountId}] explicit send detection group=${isGroup ? "1" : "0"} text=${JSON.stringify(normalizeIntentSource(cleanText).slice(0, 120))} matched=${explicitSendIntent ? explicitSendIntent.kind : "none"}`,
+  );
+  console.log(
+    `[TypeX intent] group=${isGroup ? "1" : "0"} text=${JSON.stringify(normalizeIntentSource(cleanText).slice(0, 120))} matched=${explicitSendIntent ? explicitSendIntent.kind : "none"}`,
+  );
 
   // ── Session routing ───────────────────────────────────────────────────────
   const peerId = isGroup ? chatId : senderId;
@@ -425,6 +571,78 @@ export async function processTypeXMessage(
           if (extractedFromText.length > 0) {
             logger?.info?.(`[typex:${accountId}] extracted outbound media directives: ${extractedFromText.join(", ")}`);
             console.log('extracted outbound media directives', extractedFromText);
+          }
+        }
+
+        const generatedText = text?.trim() ?? "";
+        if (explicitSendIntent) {
+          logger?.info(
+            `[typex:${accountId}] explicit send fallback matched kind=${explicitSendIntent.kind}`,
+          );
+          console.log(
+            `[TypeX intent] explicit send fallback matched kind=${explicitSendIntent.kind}`,
+          );
+          const hasSendableContent =
+            (explicitSendIntent.includeGeneratedText && generatedText.length > 0) ||
+            (explicitSendIntent.includeAttachments && attachmentPaths.length > 0);
+          if (!hasSendableContent) {
+            console.log(
+              `[TypeX intent] explicit send fallback waiting for sendable content textLen=${generatedText.length} attachmentCount=${attachmentPaths.length}`,
+            );
+            return;
+          }
+          try {
+            if (explicitSendIntent.kind === "dm-send-by-name") {
+              const messageToSend = explicitSendIntent.includeGeneratedText ? generatedText : "";
+              const mediaPathsToSend = explicitSendIntent.includeAttachments ? attachmentPaths : [];
+              await executeTypeXSendByName({
+                cfg,
+                accountId,
+                recipient: explicitSendIntent.recipient,
+                message: messageToSend,
+                mediaPaths: mediaPathsToSend,
+              });
+              await sendMessageTypeX(
+                client,
+                chatId,
+                `已代发给 ${explicitSendIntent.recipient}。`,
+                { msgType: TypeXMessageEnum.richText, replyMsgId: payload.message_id },
+              );
+              return;
+            }
+
+            const messageToSend = explicitSendIntent.includeGeneratedText ? generatedText : "";
+            const mediaPathsToSend = explicitSendIntent.includeAttachments ? attachmentPaths : [];
+            await executeTypeXSendInGroup({
+              cfg,
+              accountId,
+              chatId,
+              memberName: explicitSendIntent.memberName,
+              message: messageToSend,
+              mediaPaths: mediaPathsToSend,
+            });
+            await sendMessageTypeX(
+              client,
+              chatId,
+              `已在群里发送给 ${explicitSendIntent.memberName}。`,
+              { msgType: TypeXMessageEnum.richText, replyMsgId: payload.message_id },
+            );
+            return;
+          } catch (error: any) {
+            const message = error?.message ?? String(error);
+            logger?.warn?.(
+              `[typex:${accountId}] explicit send fallback failed: ${message}`,
+            );
+            console.log(
+              `[TypeX intent] explicit send fallback failed: ${message}`,
+            );
+            await sendMessageTypeX(
+              client,
+              chatId,
+              `发送失败：${message}`,
+              { msgType: TypeXMessageEnum.richText, replyMsgId: payload.message_id },
+            );
+            return;
           }
         }
 

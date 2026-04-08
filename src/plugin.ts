@@ -106,7 +106,10 @@ export const typexPlugin = {
       "- 如果名字匹配不唯一或目标不存在，先简短追问，不要猜。",
     ],
   },
-  agentTools: ({ cfg }) => [createTypeXSendByNameTool({ cfg }), createTypeXSendInGroupTool({ cfg })],
+  agentTools: ({ cfg }) => {
+    console.log("[TypeX tools] agentTools factory invoked");
+    return [createTypeXSendByNameTool({ cfg }), createTypeXSendInGroupTool({ cfg })];
+  },
   actions: typexMessageActions,
   reload: { configPrefixes: ["channels.typex"] },
   outbound: typexOutbound as any,
