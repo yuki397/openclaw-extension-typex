@@ -7,10 +7,7 @@ const plugin = {
   ...typexPlugin,
   messaging: {
     normalizeTarget: normalizeTypeXTarget,
-    targetResolver: {
-      looksLikeId: () => true,
-      hint: "chat_id",
-    },
+    targetResolver: typexPlugin.messaging.targetResolver,
   },
 };
 

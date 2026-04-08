@@ -1,6 +1,11 @@
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-core";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import type {
+  ChannelMessageActionAdapter,
+  ChannelMessageToolDiscovery,
+} from "openclaw/plugin-sdk/channel-contract";
+import { createTypeXSendByNameTool, createTypeXSendInGroupTool } from "./agent-tools-send.js";
 import { monitorTypeXProvider } from "./client/monitor.js";
 import { typexDirectory } from "./directory.js";
 import { typexOutbound } from "./client/outbound.js";
@@ -20,6 +25,64 @@ const meta = {
   exposure: { setup: true, docs: true, configured: true },
 };
 
+function listEnabledTypeXAccounts(
+  cfg: Record<string, any> | undefined,
+  accountId?: string | null,
+): Array<{ accountId: string }> {
+  const typexCfg = (cfg?.channels?.["openclaw-extension-typex"] ?? {}) as Record<string, any>;
+  const accounts = (typexCfg.accounts ?? {}) as Record<string, Record<string, any>>;
+
+  if (accountId) {
+    const resolvedAccountId = accountId || DEFAULT_ACCOUNT_ID;
+    const account =
+      accounts[resolvedAccountId] ||
+      (resolvedAccountId === DEFAULT_ACCOUNT_ID ? typexCfg : undefined);
+    if (account?.enabled !== false && typeof account?.token === "string" && account.token.trim()) {
+      return [{ accountId: resolvedAccountId }];
+    }
+    return [];
+  }
+
+  const enabled: Array<{ accountId: string }> = [];
+  for (const [listedAccountId, account] of Object.entries(accounts)) {
+    if (account?.enabled === false) {
+      continue;
+    }
+    if (typeof account?.token !== "string" || !account.token.trim()) {
+      continue;
+    }
+    enabled.push({ accountId: listedAccountId });
+  }
+
+  if (
+    enabled.length === 0 &&
+    typexCfg.enabled !== false &&
+    typeof typexCfg.token === "string" &&
+    typexCfg.token.trim()
+  ) {
+    enabled.push({ accountId: DEFAULT_ACCOUNT_ID });
+  }
+
+  return enabled;
+}
+
+function describeTypeXMessageTool({
+  cfg,
+  accountId,
+}: Parameters<NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>>[0]): ChannelMessageToolDiscovery {
+  const enabledAccounts = listEnabledTypeXAccounts(cfg as Record<string, any> | undefined, accountId);
+  console.log(
+    `[TypeX actions] describeMessageTool account=${accountId ?? ""} enabledAccounts=${enabledAccounts.length}`,
+  );
+  return {
+    actions: enabledAccounts.length > 0 ? ["send"] : [],
+  };
+}
+
+const typexMessageActions: ChannelMessageActionAdapter = {
+  describeMessageTool: describeTypeXMessageTool,
+};
+
 export const typexPlugin = {
   id: "openclaw-extension-typex",
   meta,
@@ -35,10 +98,16 @@ export const typexPlugin = {
   },
   agentPrompt: {
     messageToolHints: () => [
-      "You can send messages to other users or groups on TypeX by using the messaging tools.",
-      "Always resolve the recipient's ID using directory search (listPeers or listGroups) if you only have a name.",
+      "- TypeX: normal聊天时直接正常回复当前会话，不要调用发送工具。",
+      "- TypeX 单聊里如果用户明确要求“帮我发给/转给某人”，优先使用 `typex_send_by_name`，不要只把草稿贴回当前聊天。",
+      "- `typex_send_by_name` 适用于 user 身份代发，支持按名字匹配现有会话或联系人；传 `recipient`、`message`，需要转发本地图片/文件时再传 `mediaPath`。",
+      "- TypeX 群聊里如果用户要求 bot 在当前群里发给某个成员，优先使用 `typex_send_in_group`；传当前群 `chatId`、成员名 `memberName`，以及 `message` 或 `mediaPath`。",
+      "- 当前 TypeX 群上下文里，群 chat id 通常会出现在上下文的 `To: chat:<id>` 一类字段中；给 `typex_send_in_group` 时传这个 id。",
+      "- 如果名字匹配不唯一或目标不存在，先简短追问，不要猜。",
     ],
   },
+  agentTools: ({ cfg }) => [createTypeXSendByNameTool({ cfg }), createTypeXSendInGroupTool({ cfg })],
+  actions: typexMessageActions,
   reload: { configPrefixes: ["channels.typex"] },
   outbound: typexOutbound as any,
 
@@ -49,7 +118,7 @@ export const typexPlugin = {
         const trimmed = raw.trim();
         return /^(?:\d+|user:\d+|chat:\d+|group:\d+)$/i.test(trimmed);
       },
-      hint: "<chat_id | user:id | chat:id>",
+      hint: "<name | chat_id | user:id | chat:id>",
     },
   },
 

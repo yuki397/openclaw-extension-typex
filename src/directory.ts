@@ -31,6 +31,9 @@ export const typexDirectory = {
     const allowFrom = account?.allowFrom ?? (typexCfg.allowFrom as Array<string | number> | undefined) ?? [];
     const q = normalizeQuery(query);
     const max = limit && limit > 0 ? limit : undefined;
+    console.log(
+      `[TypeX directory] listPeers account=${resolvedAccountId} mode=${client.mode} query=${JSON.stringify(query ?? "")} normalized=${JSON.stringify(q)} limit=${limit ?? ""}`,
+    );
 
     const configPeers: DirectoryEntry[] = Array.from(
       new Set<string>(
@@ -44,11 +47,13 @@ export const typexDirectory = {
       .map((id: string) => ({ kind: "user", id: `user:${id}`, name: id }));
 
     if (!q) {
+      console.log(`[TypeX directory] listPeers returning config-only results=${configPeers.length}`);
       return configPeers.slice(0, max);
     }
 
     try {
       if (client.mode === "bot") {
+        console.log(`[TypeX directory] listPeers bot mode; returning config-only results=${configPeers.length}`);
         return configPeers.slice(0, max);
       }
 
@@ -79,6 +84,9 @@ export const typexDirectory = {
 
       const all: DirectoryEntry[] = [...configPeers, ...contactEntries, ...feedEntries];
       const unique = Array.from(new Map(all.map((entry) => [entry.id, entry])).values());
+      console.log(
+        `[TypeX directory] listPeers feeds=${feeds.length} contacts=${contacts.length} config=${configPeers.length} unique=${unique.length}`,
+      );
       return unique.slice(0, max);
     } catch (error) {
       console.error("Failed to fetch peers from TypeX directory", error);
@@ -89,11 +97,17 @@ export const typexDirectory = {
     const { client } = resolveClient(accountId, cfg);
     const q = normalizeQuery(query);
     const max = limit && limit > 0 ? limit : undefined;
-    if (!q || client.mode !== "user") return [];
+    console.log(
+      `[TypeX directory] listGroups account=${accountId ?? DEFAULT_ACCOUNT_ID} mode=${client.mode} query=${JSON.stringify(query ?? "")} normalized=${JSON.stringify(q)} limit=${limit ?? ""}`,
+    );
+    if (!q || client.mode !== "user") {
+      console.log("[TypeX directory] listGroups skipped because query is empty or client is not in user mode");
+      return [];
+    }
 
     try {
       const feeds = await client.fetchFeedsByName(q);
-      return feeds
+      const groups = feeds
         .filter((feed: any) => Boolean(feed.chat_id))
         .map((feed: any) => ({
           kind: "group" as const,
@@ -102,9 +116,19 @@ export const typexDirectory = {
           raw: feed,
         }))
         .slice(0, max);
+      console.log(`[TypeX directory] listGroups feeds=${feeds.length} groups=${groups.length}`);
+      return groups;
     } catch (error) {
       console.error("Failed to fetch groups from TypeX directory", error);
       return [];
     }
+  },
+  listPeersLive: async (params: any) => {
+    console.log("[TypeX directory] listPeersLive invoked");
+    return typexDirectory.listPeers(params);
+  },
+  listGroupsLive: async (params: any) => {
+    console.log("[TypeX directory] listGroupsLive invoked");
+    return typexDirectory.listGroups(params);
   },
 };
