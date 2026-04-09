@@ -400,12 +400,9 @@ export async function processTypeXMessage(
             const outPath = path.join(outDir, `${baseName}.${ext}`);
             fs.writeFileSync(outPath, fileData.buffer);
             attachmentPaths.push(outPath);
-            logger?.info?.(`[typex:${accountId}] saved attachment to ${outPath}`);
-            console.log('saved attachment to', outPath);
           } catch (e: any) {
             const msg = e?.message ?? String(e);
             logger?.warn?.(`[typex:${accountId}] failed to persist attachment: ${msg}`);
-            console.log('failed to persist attachment', msg);
           }
 
           attachments.push({
@@ -418,7 +415,6 @@ export async function processTypeXMessage(
           });
         }
       }
-      console.log('processed attachments:', attachments.map(a => ({ type: a.contentType, size: a.size })));
     }
   }
 
@@ -438,13 +434,15 @@ export async function processTypeXMessage(
     mentions: payload.mentions,
     appId,
   });
-  logger?.info(
-    `[typex:${accountId}] explicit send detection group=${isGroup ? "1" : "0"} text=${JSON.stringify(normalizeIntentSource(cleanText).slice(0, 120))} matched=${explicitSendIntent ? explicitSendIntent.kind : "none"}`,
-  );
-  console.log(
-    `[TypeX intent] group=${isGroup ? "1" : "0"} text=${JSON.stringify(normalizeIntentSource(cleanText).slice(0, 120))} matched=${explicitSendIntent ? explicitSendIntent.kind : "none"}`,
-  );
-
+  if (explicitSendIntent) {
+    const targetLabel =
+      explicitSendIntent.kind === "dm-send-by-name"
+        ? explicitSendIntent.recipient
+        : explicitSendIntent.memberName;
+    logger?.info(
+      `[typex:${accountId}] detected explicit send intent kind=${explicitSendIntent.kind} target=${targetLabel}`,
+    );
+  }
   // ── Session routing ───────────────────────────────────────────────────────
   const peerId = isGroup ? chatId : senderId;
   let route: { sessionKey?: string; agentId?: string; accountId?: string } = {};
@@ -568,26 +566,23 @@ export async function processTypeXMessage(
             if (v) extractedFromText.push(v);
             return "";
           }).trim();
-          if (extractedFromText.length > 0) {
-            logger?.info?.(`[typex:${accountId}] extracted outbound media directives: ${extractedFromText.join(", ")}`);
-            console.log('extracted outbound media directives', extractedFromText);
-          }
         }
 
         const generatedText = text?.trim() ?? "";
         if (explicitSendIntent) {
+          const targetLabel =
+            explicitSendIntent.kind === "dm-send-by-name"
+              ? explicitSendIntent.recipient
+              : explicitSendIntent.memberName;
           logger?.info(
-            `[typex:${accountId}] explicit send fallback matched kind=${explicitSendIntent.kind}`,
-          );
-          console.log(
-            `[TypeX intent] explicit send fallback matched kind=${explicitSendIntent.kind}`,
+            `[typex:${accountId}] executing explicit send fallback kind=${explicitSendIntent.kind} target=${targetLabel}`,
           );
           const hasSendableContent =
             (explicitSendIntent.includeGeneratedText && generatedText.length > 0) ||
             (explicitSendIntent.includeAttachments && attachmentPaths.length > 0);
           if (!hasSendableContent) {
-            console.log(
-              `[TypeX intent] explicit send fallback waiting for sendable content textLen=${generatedText.length} attachmentCount=${attachmentPaths.length}`,
+            logger?.info(
+              `[typex:${accountId}] waiting for sendable content before explicit send kind=${explicitSendIntent.kind}`,
             );
             return;
           }
@@ -608,6 +603,9 @@ export async function processTypeXMessage(
                 `已代发给 ${explicitSendIntent.recipient}。`,
                 { msgType: TypeXMessageEnum.richText, replyMsgId: payload.message_id },
               );
+              logger?.info(
+                `[typex:${accountId}] explicit send completed kind=${explicitSendIntent.kind} target=${explicitSendIntent.recipient}`,
+              );
               return;
             }
 
@@ -627,14 +625,14 @@ export async function processTypeXMessage(
               `已在群里发送给 ${explicitSendIntent.memberName}。`,
               { msgType: TypeXMessageEnum.richText, replyMsgId: payload.message_id },
             );
+            logger?.info(
+              `[typex:${accountId}] explicit send completed kind=${explicitSendIntent.kind} target=${explicitSendIntent.memberName}`,
+            );
             return;
           } catch (error: any) {
             const message = error?.message ?? String(error);
             logger?.warn?.(
               `[typex:${accountId}] explicit send fallback failed: ${message}`,
-            );
-            console.log(
-              `[TypeX intent] explicit send fallback failed: ${message}`,
             );
             await sendMessageTypeX(
               client,
@@ -657,8 +655,6 @@ export async function processTypeXMessage(
             : [];
 
         for (const url of [...urls, ...extractedFromText]) {
-          logger?.info?.(`[typex:${accountId}] sending outbound mediaUrl=${url}`);
-          console.log('sending outbound mediaUrl', url);
           await sendMessageTypeX(client, chatId, {}, { mediaUrl: url, msgType: TypeXMessageEnum.richText, replyMsgId: payload.message_id });
         }
       },

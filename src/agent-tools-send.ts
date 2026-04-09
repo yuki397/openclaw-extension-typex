@@ -130,10 +130,6 @@ async function resolvePeerTargetByName(params: {
       .filter((entry) => entry.friendId),
     (entry) => entry.friendId,
   );
-  console.log(
-    `[TypeX tool] resolvePeerTargetByName recipient=${JSON.stringify(params.recipient)} contacts=${uniqueMatchingContacts.length}`,
-  );
-
   if (uniqueMatchingContacts.length === 1) {
     return {
       kind: "user",
@@ -143,9 +139,6 @@ async function resolvePeerTargetByName(params: {
     };
   }
   if (uniqueMatchingContacts.length > 1) {
-    console.log(
-      `[TypeX tool] ambiguous contact matches recipient=${JSON.stringify(params.recipient)} matches=${JSON.stringify(uniqueMatchingContacts)}`,
-    );
     throw new Error(`找到多个名为 ${params.recipient} 的联系人，请说得更具体一点。`);
   }
 
@@ -159,10 +152,6 @@ async function resolvePeerTargetByName(params: {
       .filter((entry) => entry.chatId),
     (entry) => entry.chatId,
   );
-  console.log(
-    `[TypeX tool] resolvePeerTargetByName recipient=${JSON.stringify(params.recipient)} feeds=${uniqueMatchingFeeds.length}`,
-  );
-
   if (uniqueMatchingFeeds.length === 1) {
     return {
       kind: "chat",
@@ -172,9 +161,6 @@ async function resolvePeerTargetByName(params: {
     };
   }
   if (uniqueMatchingFeeds.length > 1) {
-    console.log(
-      `[TypeX tool] ambiguous feed matches recipient=${JSON.stringify(params.recipient)} matches=${JSON.stringify(uniqueMatchingFeeds)}`,
-    );
     throw new Error(`找到多个名为 ${params.recipient} 的会话，请说得更具体一点。`);
   }
 
@@ -360,9 +346,6 @@ export function createTypeXSendByNameTool(params: { cfg?: OpenClawConfig }): Cha
       if (!message && !mediaPath) {
         throw new Error("message 和 mediaPath 至少要提供一个。");
       }
-      console.log(
-        `[TypeX tool] typex_send_by_name recipient=${JSON.stringify(recipient)} hasMessage=${message ? "1" : "0"} mediaPath=${JSON.stringify(mediaPath)}`,
-      );
       const { target, sent } = await executeTypeXSendByName({
         cfg: params.cfg,
         recipient,
@@ -410,10 +393,6 @@ async function resolveGroupMemberByName(params: {
   const matches = directMatches.length > 0
     ? directMatches
     : filterMembersMentionedInSentence(members, params.memberName).filter((entry: { id: string; name: string }) => entry.id);
-  console.log(
-    `[TypeX tool] resolveGroupMemberByName memberName=${JSON.stringify(params.memberName)} directMatches=${directMatches.length} sentenceMatches=${matches.length}`,
-  );
-
   if (matches.length === 1) {
     return matches[0];
   }
@@ -448,9 +427,6 @@ export function createTypeXSendInGroupTool(params: { cfg?: OpenClawConfig }): Ch
       if (!message && !mediaPath) {
         throw new Error("message 和 mediaPath 至少要提供一个。");
       }
-      console.log(
-        `[TypeX tool] typex_send_in_group chatId=${JSON.stringify(rawChatId)} memberName=${JSON.stringify(memberName)} hasMessage=${message ? "1" : "0"} mediaPath=${JSON.stringify(mediaPath)}`,
-      );
       const { chatId, member, sent } = await executeTypeXSendInGroup({
         cfg: params.cfg,
         chatId: rawChatId,

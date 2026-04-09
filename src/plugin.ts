@@ -71,9 +71,6 @@ function describeTypeXMessageTool({
   accountId,
 }: Parameters<NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>>[0]): ChannelMessageToolDiscovery {
   const enabledAccounts = listEnabledTypeXAccounts(cfg as Record<string, any> | undefined, accountId);
-  console.log(
-    `[TypeX actions] describeMessageTool account=${accountId ?? ""} enabledAccounts=${enabledAccounts.length}`,
-  );
   return {
     actions: enabledAccounts.length > 0 ? ["send"] : [],
   };
@@ -106,10 +103,7 @@ export const typexPlugin = {
       "- 如果名字匹配不唯一或目标不存在，先简短追问，不要猜。",
     ],
   },
-  agentTools: ({ cfg }) => {
-    console.log("[TypeX tools] agentTools factory invoked");
-    return [createTypeXSendByNameTool({ cfg }), createTypeXSendInGroupTool({ cfg })];
-  },
+  agentTools: ({ cfg }) => [createTypeXSendByNameTool({ cfg }), createTypeXSendInGroupTool({ cfg })],
   actions: typexMessageActions,
   reload: { configPrefixes: ["channels.typex"] },
   outbound: typexOutbound as any,

@@ -24,10 +24,6 @@ function isSessionAuthFailure(status: number, bodyText: string, resJson?: { code
   return status === 401 || combined.includes("session auth error");
 }
 
-function shellEscapeSingleQuoted(value: string): string {
-  return `'${value.replace(/'/g, `'\"'\"'`)}'`;
-}
-
 function summarizeInvalidResponse(status: number, bodyText: string): string {
   const normalized = bodyText.replace(/\s+/g, " ").trim();
   const htmlTitle = normalized.match(/<title>(.*?)<\/title>/i)?.[1]?.trim();
@@ -91,22 +87,6 @@ export class TypeXClient {
   }
 
   private async postJson<T>(endpoint: string, payload: unknown): Promise<T> {
-    if (
-      endpoint === "/open/claw/feeds_by_name" ||
-      endpoint === "/open/claw/contacts_by_name" ||
-      endpoint === "/open/robot/group_members"
-    ) {
-      const headers = this.getAuthHeaders({ "Content-Type": "application/json" });
-      const curlParts = [`curl -X POST ${shellEscapeSingleQuoted(`${TYPEX_DOMAIN}${endpoint}`)}`];
-
-      for (const [key, value] of Object.entries(headers)) {
-        curlParts.push(`-H ${shellEscapeSingleQuoted(`${key}: ${value}`)}`);
-      }
-
-      curlParts.push(`-d ${shellEscapeSingleQuoted(JSON.stringify(payload))}`);
-      console.log(`[TypeX debug] ${endpoint} curl:\n${curlParts.join(" \\\n  ")}`);
-    }
-
     const response = await fetch(`${TYPEX_DOMAIN}${endpoint}`, {
       method: "POST",
       headers: this.getAuthHeaders({ "Content-Type": "application/json" }),
@@ -179,7 +159,6 @@ export class TypeXClient {
   ) {
     if (!this.accessToken) throw new Error("TypeXClient: Not authenticated.");
     if (prompter) prompter.note(`TypeXClient sending to ${to}: ${preview.slice(0, 80)}`);
-    else console.log(`TypeXClient sending to ${to}: ${preview.slice(0, 80)}`);
 
     const payloadStr = JSON.stringify(payload);
 
@@ -190,8 +169,6 @@ export class TypeXClient {
     });
 
     const bodyText = await response.text();
-    console.log(`[TypeX debug] sendMessage endpoint=${endpoint} payload=${payloadStr}`);
-    console.log(`[TypeX debug] sendMessage response status=${response.status} body=${bodyText.slice(0, 1000)}`);
     let resJson;
     try {
       resJson = JSON.parse(bodyText);
@@ -347,16 +324,7 @@ export class TypeXClient {
 
   async listGroupMembers(chatId: string): Promise<TypeXGroupMemberEntry[]> {
     if (!chatId.trim() || this.mode !== "bot") return [];
-    const result = await this.postJson<TypeXGroupMemberEntry[]>("/open/robot/group_members", { chatid: chatId });
-    console.log(
-      `[TypeX debug] /open/robot/group_members response members=${JSON.stringify(
-        result.map((member) => ({
-          user_id: member.user_id,
-          name: member.name,
-        })),
-      )}`,
-    );
-    return result;
+    return this.postJson<TypeXGroupMemberEntry[]>("/open/robot/group_members", { chatid: chatId });
   }
 
   /**
@@ -557,7 +525,7 @@ export class TypeXClient {
       });
 
       if (!response.ok) {
-        console.log(`fetchFileBuffer failed with status: ${response.status} ${response.statusText} for url: ${url}`);
+        console.warn(`fetchFileBuffer failed with status: ${response.status} ${response.statusText} for url: ${url}`);
         return null;
       }
 
@@ -567,7 +535,7 @@ export class TypeXClient {
 
       return { buffer, mimeType };
     } catch (e) {
-      console.log(`fetchFileBuffer error: ${e}`);
+      console.error(`fetchFileBuffer error: ${e}`);
       return null;
     }
   }
@@ -593,7 +561,7 @@ export class TypeXClient {
       if (resJson.code !== 0) return [];
       return Array.isArray(resJson.data) ? resJson.data : [];
     } catch (e) {
-      console.log(`fetchFeedsByName error: ${e}`);
+      console.error(`fetchFeedsByName error: ${e}`);
       return [];
     }
   }
@@ -619,7 +587,7 @@ export class TypeXClient {
       if (resJson.code !== 0) return [];
       return Array.isArray(resJson.data) ? resJson.data : [];
     } catch (e) {
-      console.log(`fetchContactsByName error: ${e}`);
+      console.error(`fetchContactsByName error: ${e}`);
       return [];
     }
   }
@@ -639,7 +607,7 @@ export class TypeXClient {
       if (resJson.code !== 0) return [];
       return Array.isArray(resJson.data) ? resJson.data : [];
     } catch (e) {
-      console.log(`fetchGroupMembersByName error: ${e}`);
+      console.error(`fetchGroupMembersByName error: ${e}`);
       return [];
     }
   }
