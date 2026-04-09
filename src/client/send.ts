@@ -9,6 +9,7 @@ export type TypeXSendOpts = {
   receiverId?: string;
   isDelegate?: boolean;
   atUserIds?: string[];
+  atMentions?: Array<{ id: string; name: string }>;
 };
 
 /**
@@ -95,6 +96,7 @@ export async function sendMessageTypeX(
     ? await client.sendBotGroupMessage(chatId, finalContent, msgType, {
       replyMsgId: opts.replyMsgId,
       atUserIds: opts.atUserIds,
+      atMentions: opts.atMentions,
     })
     : opts.isDelegate && opts.receiverId
       ? await client.sendDelegatedContactMessage(opts.receiverId, finalContent, msgType)

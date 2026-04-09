@@ -317,6 +317,7 @@ export async function executeTypeXSendInGroup(params: ExecuteTypeXSendInGroupPar
     });
     await client.sendBotGroupMessage(chatId, uploaded.content, uploaded.msgType, {
       atUserIds: [member.id],
+      atMentions: [{ id: member.id, name: member.name }],
     });
     sent.push(uploaded.kindLabel);
   }
@@ -324,6 +325,7 @@ export async function executeTypeXSendInGroup(params: ExecuteTypeXSendInGroupPar
   if (message) {
     await client.sendBotGroupMessage(chatId, message, TypeXMessageEnum.text, {
       atUserIds: [member.id],
+      atMentions: [{ id: member.id, name: member.name }],
     });
     sent.push("text");
   }

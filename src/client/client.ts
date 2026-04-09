@@ -16,6 +16,7 @@ type TypeXSendOptions = {
   receiverId?: string;
   isDelegate?: boolean;
   atUserIds?: string[];
+  atMentions?: Array<{ id: string; name: string }>;
 };
 
 function isSessionAuthFailure(status: number, bodyText: string, resJson?: { code?: number; msg?: string; message?: string }) {
@@ -37,6 +38,22 @@ function summarizeInvalidResponse(status: number, bodyText: string): string {
 
 function buildTextContent(content: string | object) {
   return typeof content === "string" ? { text: content } : content;
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function buildMentionRichText(text: string, mentions: Array<{ id: string; name: string }>) {
+  const mentionMarkup = mentions
+    .map((mention) => `<at userid="${escapeHtml(mention.id)}">${escapeHtml(mention.name)}</at>`)
+    .join("&nbsp;");
+  const suffix = text.trim() ? `&nbsp;${escapeHtml(text.trim())}` : "";
+  return `<p>${mentionMarkup}${suffix}</p>`;
 }
 
 export class TypeXClient {
@@ -251,9 +268,10 @@ export class TypeXClient {
     chatId: string,
     content: string | object,
     msgType: TypeXMessageEnum = TypeXMessageEnum.text,
-    options: Pick<TypeXSendOptions, "replyMsgId" | "atUserIds"> = {},
+    options: Pick<TypeXSendOptions, "replyMsgId" | "atUserIds" | "atMentions"> = {},
   ) {
     const mentionIds = Array.isArray(options.atUserIds) && options.atUserIds.length > 0 ? options.atUserIds : undefined;
+    const mentionEntries = Array.isArray(options.atMentions) && options.atMentions.length > 0 ? options.atMentions : undefined;
     const normalizedMsgType =
       msgType === TypeXMessageEnum.text || msgType === TypeXMessageEnum.richText
         ? TypeXMessageEnum.text
@@ -261,7 +279,12 @@ export class TypeXClient {
     const normalizedContent =
       normalizedMsgType === TypeXMessageEnum.text
         ? {
-          text: typeof content === "string" ? content : JSON.stringify(content),
+          text:
+            mentionEntries && mentionEntries.length > 0
+              ? buildMentionRichText(typeof content === "string" ? content : JSON.stringify(content), mentionEntries)
+              : typeof content === "string"
+                ? content
+                : JSON.stringify(content),
           at_user_ids: mentionIds,
         }
         : typeof content === "object" && content !== null
@@ -297,6 +320,7 @@ export class TypeXClient {
       return this.sendBotGroupMessage(to, content, msgType, {
         replyMsgId: options.replyMsgId,
         atUserIds: options.atUserIds,
+        atMentions: options.atMentions,
       });
     }
 
