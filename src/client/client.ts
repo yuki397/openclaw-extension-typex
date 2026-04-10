@@ -456,7 +456,6 @@ export class TypeXClient {
 
   /**
    * Pull messages for a bot account (Bearer token auth).
-   * TODO: replace /open/bot/message with the actual endpoint path once confirmed.
    */
   private async fetchBotMessages(): Promise<TypeXMessageEntry[]> {
     if (!this.accessToken) return [];
@@ -544,12 +543,6 @@ export class TypeXClient {
    * Search feeds by name (User mode)
    */
   async fetchFeedsByName(name: string): Promise<Array<{ id: string; name: string }>> {
-    // ---- MOCK FOR LOCAL TESTING ----
-    if (name.toLowerCase().includes("frannie")) {
-      return [{ id: "7459241604734277650", name: "Frannie Voss" }];
-    }
-    // --------------------------------
-
     if (!this.accessToken || this.mode !== "user") return [];
     try {
       const response = await fetch(`${TYPEX_DOMAIN}/open/claw/feeds_by_name`, {
@@ -570,12 +563,6 @@ export class TypeXClient {
    * Search contacts by name (User mode)
    */
   async fetchContactsByName(name: string): Promise<Array<{ id: string; name: string; alias?: string }>> {
-    // ---- MOCK FOR LOCAL TESTING ----
-    if (name.toLowerCase().includes("frannie")) {
-      return [{ id: "7459241604734277650", name: "Frannie Voss", alias: "Frannie" }];
-    }
-    // --------------------------------
-
     if (!this.accessToken || this.mode !== "user") return [];
     try {
       const response = await fetch(`${TYPEX_DOMAIN}/open/claw/contacts_by_name`, {

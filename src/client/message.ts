@@ -581,9 +581,6 @@ export async function processTypeXMessage(
             (explicitSendIntent.includeGeneratedText && generatedText.length > 0) ||
             (explicitSendIntent.includeAttachments && attachmentPaths.length > 0);
           if (!hasSendableContent) {
-            logger?.info(
-              `[typex:${accountId}] waiting for sendable content before explicit send kind=${explicitSendIntent.kind}`,
-            );
             return;
           }
           try {

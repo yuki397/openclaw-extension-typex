@@ -46,11 +46,11 @@
     "channel": {
       "id": "openclaw-extension-typex",
       "label": "TypeX",
-      "selectionLabel": "TypeX (QR Code Login)",
+      "selectionLabel": "TypeX (QR Code / Bot Token Login)",
       "detailLabel": "TypeX Bot",
       "docsPath": "/channels/typex",
       "docsLabel": "typex",
-      "blurb": "TypeX bot via QR Code login.",
+      "blurb": "TypeX bot via QR Code / Bot Token login.",
       "order": 100,
       "quickstartAllowFrom": true,
       "exposure": {
