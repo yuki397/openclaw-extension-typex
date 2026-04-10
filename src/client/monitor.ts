@@ -26,15 +26,15 @@ type TypeXPosState = {
 
 const POS_STORE_VERSION = 1;
 
-const OPENCLAW_CONFIG_PATH =
-  process.env.OPENCLAW_CONFIG_PATH || path.join(os.homedir(), ".openclaw", "openclaw.json");
+const OPENCLAW_HOME_DIR = path.join(os.homedir(), ".openclaw");
+const OPENCLAW_CONFIG_PATH = path.join(OPENCLAW_HOME_DIR, "openclaw.json");
 
 function normalizeAccountIdForFile(accountId: string): string {
   return (accountId || "default").replace(/[^a-z0-9._-]+/gi, "_");
 }
 
 function resolveTypeXPosStatePath(accountId: string): string {
-  const stateDir = getTypeXRuntime().state.resolveStateDir(process.env, os.homedir);
+  const stateDir = getTypeXRuntime().state.resolveStateDir({}, os.homedir);
   const normalized = normalizeAccountIdForFile(accountId);
   return path.join(stateDir, "typex", `update-pos-${normalized}.json`);
 }
