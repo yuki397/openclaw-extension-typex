@@ -1,5 +1,12 @@
 export function normalizeTypeXTarget(raw: string): string {
-  let normalized = raw.replace(/^typex:/i, "").trim();
-  normalized = normalized.replace(/^(group|chat|user|dm):/i, "").trim();
+  const normalized = raw.replace(/^typex:/i, "").trim();
+  if (!normalized) {
+    return normalized;
+  }
+
+  if (/^dm:/i.test(normalized)) {
+    return `user:${normalized.slice(3).trim()}`;
+  }
+
   return normalized;
 }

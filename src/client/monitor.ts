@@ -1,7 +1,9 @@
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
-import type { HistoryEntry, OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/channel-core";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { getTypeXClient } from "./client.js";
 import { processTypeXMessage } from "./message.js";
 import { getTypeXRuntime } from "./runtime.js";
@@ -216,22 +218,54 @@ export async function monitorTypeXProvider(opts: MonitorTypeXOpts) {
 
   // Group history buffer: lives for the entire monitor lifetime.
   const chatHistories = new Map<string, HistoryEntry[]>();
-
   let fatalError: Error | null = null;
+  let consecutiveFetchFailures = 0;
+
+  const resolveBackoffMs = (failures: number) => {
+    if (failures <= 0) return 3000;
+    if (failures === 1) return 10000;
+    if (failures === 2) return 30000;
+    if (failures === 3) return 60000;
+    return 300000;
+  };
+
+  const isFatalFetchError = (err: unknown) => {
+    const message = err instanceof Error ? err.message : String(err);
+    const normalized = message.toLowerCase();
+    return (
+      normalized.includes("non-json response") ||
+      normalized.includes("session auth error") ||
+      normalized.includes("http 401") ||
+      normalized.includes("http 403") ||
+      normalized.includes("http 404")
+    );
+  };
 
   // --- Polling Loop ---
   while (!abortSignal.aborted) {
     let messages: Awaited<ReturnType<typeof client.fetchMessages>>;
     try {
       messages = await client.fetchMessages(currentPos);
+      consecutiveFetchFailures = 0;
     } catch (err) {
-      // fetchMessages threw — this is treated as a fatal error (e.g. auth failure,
-      // bad token, server unreachable). Stop the monitor so we don't spam the API.
+      consecutiveFetchFailures += 1;
+      const backoffMs = resolveBackoffMs(consecutiveFetchFailures);
+      const error = err instanceof Error ? err : new Error(String(err));
+
       logger?.error(
-        `[${accountObj.accountId}] Fatal error fetching TypeX messages; stopping monitor: ${err instanceof Error ? err.stack : String(err)}`,
+        `[${accountObj.accountId}] Failed to fetch TypeX messages (attempt ${consecutiveFetchFailures}); next retry in ${Math.round(backoffMs / 1000)}s: ${error.message}`,
       );
-      fatalError = err instanceof Error ? err : new Error(String(err));
-      break;
+
+      if (isFatalFetchError(error) || consecutiveFetchFailures >= 5) {
+        logger?.error(
+          `[${accountObj.accountId}] Fatal error fetching TypeX messages; stopping monitor to avoid request spam.`,
+        );
+        fatalError = error;
+        break;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, backoffMs));
+      continue;
     }
 
     if (messages && messages.length > 0) {

@@ -5,13 +5,14 @@
  * Pure helpers live in ./message-helpers.ts.
  */
 
-import type { HistoryEntry, OpenClawConfig } from "openclaw/plugin-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/channel-core";
 import {
+  type HistoryEntry,
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
   DEFAULT_GROUP_HISTORY_LIMIT,
   recordPendingHistoryEntryIfEnabled,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/reply-history";
 import type { TypeXClient } from "./client.js";
 import {
   buildAgentBody,
@@ -24,9 +25,15 @@ import {
 } from "./message-helpers.js";
 import { getTypeXRuntime } from "./runtime.js";
 import { sendMessageTypeX } from "./send.js";
-import { TypeXMessageEnum, type TypeXMessageEntry } from "./types.js";
+import { executeTypeXSendByName, executeTypeXSendInGroup } from "../agent-tools-send.js";
+import {
+  TypeXMessageEnum,
+  type TypeXMention,
+  type TypeXMessageEntry,
+} from "./types.js";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 
 export type ProcessTypeXMessageOptions = {
   cfg?: OpenClawConfig;
@@ -45,6 +52,135 @@ export type ProcessTypeXMessageOptions = {
 export { buildAgentBody, checkBotMentioned, normalizeMessageToText, stripBotMention } from "./message-helpers.js";
 
 const CHANNEL_ID = "openclaw-extension-typex";
+
+type ExplicitSendIntent =
+  | {
+    kind: "dm-send-by-name";
+    recipient: string;
+    includeGeneratedText: boolean;
+    includeAttachments: boolean;
+  }
+  | {
+    kind: "group-send-in-group";
+    memberName: string;
+    includeGeneratedText: boolean;
+    includeAttachments: boolean;
+  };
+
+function cleanupRecipient(value: string): string {
+  return value
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[，。！？!?,；;:：]+$/g, "")
+    .replace(/<\/?[a-z][^>]*$/i, "")
+    .replace(/(?:<\/?(?:p|li|ul|ol|span|div|br)[^>]*)+$/gi, "")
+    .replace(/^(给|到)/, "")
+    .replace(/(吗|吧|呀|啊)$/g, "")
+    .trim();
+}
+
+function normalizeIntentSource(value: string): string {
+  return value
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function shouldIncludeGeneratedTextForExplicitSend(text: string) {
+  return /(生成|写|整理|总结|编|拟|回复|文案|消息|内容|代码|祝福|介绍|说明)/.test(text);
+}
+
+function shouldIncludeAttachmentsForExplicitSend(text: string, attachmentPaths: string[]) {
+  if (attachmentPaths.length === 0) {
+    return false;
+  }
+  return /(图|图片|照片|附件|文件|发这张|把这张|这个文件|这个附件)/.test(text);
+}
+
+function resolveMentionTargetName(mentions: TypeXMention[] | undefined, appId: string, fallbackToken: string) {
+  const visibleMentions = (mentions ?? []).filter((mention) => {
+    const userId = mention.id?.user_id ?? mention.id?.open_id ?? "";
+    return userId && userId !== appId;
+  });
+  if (visibleMentions.length === 1) {
+    return visibleMentions[0].name?.trim() || fallbackToken;
+  }
+  return fallbackToken;
+}
+
+function detectExplicitSendIntent(params: {
+  text: string;
+  isGroup: boolean;
+  attachmentPaths: string[];
+  mentions?: TypeXMention[];
+  appId: string;
+}): ExplicitSendIntent | null {
+  const source = normalizeIntentSource(params.text);
+  if (!source) {
+    return null;
+  }
+
+  const includeGeneratedText =
+    params.attachmentPaths.length === 0 ||
+    shouldIncludeGeneratedTextForExplicitSend(source);
+  const includeAttachments = shouldIncludeAttachmentsForExplicitSend(source, params.attachmentPaths);
+  const sendPatterns = [
+    /(?:帮我|麻烦你|请你|你帮我|你帮忙)?(?:把)?(?:.*?)(?:发给|发送给|转给|转发给|代发给)\s*([^\n，。！？!?,；;]+)/,
+    /(?:帮我|麻烦你|请你|你帮我|你帮忙)?发(?:一条消息|个消息|消息|一句话|一段话|一下)?给\s*([^\n，。！？!?,；;]+)/,
+    /(?:帮我|麻烦你|请你|你帮我|你帮忙)?发.+?给\s*([^\n，。！？!?,；;]+)/,
+    /(?:帮我|麻烦你|请你|你帮我|你帮忙)?把(?:.+?)(?:发|发送|转发)给\s*([^\n，。！？!?,；;]+)/,
+  ];
+  const sendMatch = sendPatterns
+    .map((pattern) => source.match(pattern))
+    .find((match) => Boolean(match?.[1]));
+  if (sendMatch?.[1]) {
+    const rawRecipient = cleanupRecipient(sendMatch[1]);
+    if (!rawRecipient) {
+      return null;
+    }
+
+    if (params.isGroup) {
+      const pronounTarget = /^(他|她|它|TA|ta|对方)$/.test(rawRecipient)
+        ? resolveMentionTargetName(params.mentions, params.appId, rawRecipient)
+        : rawRecipient;
+      return {
+        kind: "group-send-in-group",
+        memberName: pronounTarget,
+        includeGeneratedText,
+        includeAttachments,
+      };
+    }
+
+    return {
+      kind: "dm-send-by-name",
+      recipient: rawRecipient,
+      includeGeneratedText,
+      includeAttachments,
+    };
+  }
+
+  if (params.isGroup) {
+    const hasTellIntent =
+      source.includes("告诉") ||
+      /跟.+?(?:说|讲)/.test(source) ||
+      /对.+?(?:说|讲)/.test(source) ||
+      /让.+?知道/.test(source);
+    if (!hasTellIntent) {
+      return null;
+    }
+    return {
+      kind: "group-send-in-group",
+      memberName: source,
+      includeGeneratedText: true,
+      includeAttachments,
+    };
+  }
+
+  return null;
+}
 
 export async function processTypeXMessage(
   client: TypeXClient,
@@ -97,10 +233,12 @@ export async function processTypeXMessage(
   const chatId = payload.chat_id;
   const senderId = payload.sender_id;
   const senderName = payload.sender_name ?? senderId;
-  const isGroup = payload.chat_type === "group";
+  const isGroup = payload.chat_type === "group" || client.mode === "bot";
   const rawText = normalizeMessageToText(payload);
 
-  logger?.info(`[typex:${accountId}] ${isGroup ? "group" : "DM"} message from ${senderId} in ${chatId}`);
+  logger?.info(
+    `[typex:${accountId}] ${isGroup ? "group" : "DM"} message from ${senderId} in ${chatId} (chat_type=${payload.chat_type ?? "unknown"} mode=${client.mode})`,
+  );
 
   if (!rawText.trim()) {
     logger?.info(`[typex:${accountId}] skipping empty/system message`);
@@ -242,54 +380,40 @@ export async function processTypeXMessage(
     }
 
     if (objectKeys.size > 0) {
-      if (client.mode === "bot") {
-        for (const objectKey of objectKeys) {
-          logger?.info(`[typex:${accountId}] fetching attachment objectKey=${objectKey}`);
-          const fileData = await client.fetchFileBuffer(objectKey);
-          if (fileData) {
-            const isImage = fileData.mimeType.startsWith("image/");
+      for (const objectKey of objectKeys) {
+        logger?.info(`[typex:${accountId}] fetching attachment objectKey=${objectKey}`);
+        const fileData = await client.fetchFileBuffer(objectKey);
+        if (fileData) {
+          const isImage = fileData.mimeType.startsWith("image/");
 
-            // Persist to local disk so the agent can open the image via the read tool
-            // even if this surface can't transport binary attachments to the model.
-            try {
-              const extRaw = String(fileData.mimeType ?? "application/octet-stream").split("/")[1] ?? "bin";
-              const ext = extRaw === "jpeg" ? "jpg" : extRaw;
-              const outDir = path.join(process.env.HOME ?? ".", ".openclaw", "typex-attachments", String(payload.message_id));
-              fs.mkdirSync(outDir, { recursive: true });
-              const baseName = String(objectKey).replace(/[^a-zA-Z0-9._-]+/g, "_");
-              const outPath = path.join(outDir, `${baseName}.${ext}`);
-              fs.writeFileSync(outPath, fileData.buffer);
-              attachmentPaths.push(outPath);
-              logger?.info?.(`[typex:${accountId}] saved attachment to ${outPath}`);
-              console.log('saved attachment to', outPath);
-            } catch (e: any) {
-              const msg = e?.message ?? String(e);
-              logger?.warn?.(`[typex:${accountId}] failed to persist attachment: ${msg}`);
-              console.log('failed to persist attachment', msg);
-              try {
-                console.log('persist debug', {
-                  home: process.env.HOME,
-                  cwd: process.cwd(),
-                  messageId: payload.message_id,
-                  objectKey,
-                  mimeType: fileData.mimeType,
-                });
-              } catch { }
-            }
-
-            attachments.push({
-              contentType: fileData.mimeType,
-              mimeType: fileData.mimeType, // Alias
-              size: fileData.buffer.length,
-              payload: fileData.buffer.toString("base64"),
-              data: fileData.buffer.toString("base64"), // Alias
-              type: isImage ? "image" : "file", // Alias
-            });
+          // Persist to local disk so the agent can open the image via the read tool
+          // even if this surface can't transport binary attachments to the model.
+          try {
+            const extRaw = String(fileData.mimeType ?? "application/octet-stream").split("/")[1] ?? "bin";
+            const ext = extRaw === "jpeg" ? "jpg" : extRaw;
+            const homeDir = os.homedir?.() ?? ".";
+            // Store TypeX attachments under the OpenClaw workspace so newer
+            // local-media allowlists can safely expose them to the model.
+            const outDir = path.join(homeDir, ".openclaw", "workspace", "typex-attachments", String(payload.message_id));
+            fs.mkdirSync(outDir, { recursive: true });
+            const baseName = String(objectKey).replace(/[^a-zA-Z0-9._-]+/g, "_");
+            const outPath = path.join(outDir, `${baseName}.${ext}`);
+            fs.writeFileSync(outPath, fileData.buffer);
+            attachmentPaths.push(outPath);
+          } catch (e: any) {
+            const msg = e?.message ?? String(e);
+            logger?.warn?.(`[typex:${accountId}] failed to persist attachment: ${msg}`);
           }
+
+          attachments.push({
+            contentType: fileData.mimeType,
+            mimeType: fileData.mimeType, // Alias
+            size: fileData.buffer.length,
+            payload: fileData.buffer.toString("base64"),
+            data: fileData.buffer.toString("base64"), // Alias
+            type: isImage ? "image" : "file", // Alias
+          });
         }
-        console.log('processed attachments:', attachments.map(a => ({ type: a.contentType, size: a.size })));
-      } else {
-        logger?.info(`[typex:${accountId}] skipping attachment fetch because mode is not bot`);
       }
     }
   }
@@ -302,7 +426,23 @@ export async function processTypeXMessage(
   const cleanTextWithAttachments = attachmentPaths.length > 0
     ? `${cleanText}\n\n[TypeX attachments saved locally]\n${attachmentPaths.map(p => `- ${p}`).join("\n")}`
     : cleanText;
-
+  const contentForAgent = cleanTextWithAttachments;
+  const explicitSendIntent = detectExplicitSendIntent({
+    text: cleanText,
+    isGroup,
+    attachmentPaths,
+    mentions: payload.mentions,
+    appId,
+  });
+  if (explicitSendIntent) {
+    const targetLabel =
+      explicitSendIntent.kind === "dm-send-by-name"
+        ? explicitSendIntent.recipient
+        : explicitSendIntent.memberName;
+    logger?.info(
+      `[typex:${accountId}] detected explicit send intent kind=${explicitSendIntent.kind} target=${targetLabel}`,
+    );
+  }
   // ── Session routing ───────────────────────────────────────────────────────
   const peerId = isGroup ? chatId : senderId;
   let route: { sessionKey?: string; agentId?: string; accountId?: string } = {};
@@ -325,7 +465,7 @@ export async function processTypeXMessage(
   const agentBody = buildAgentBody({
     messageId: payload.message_id,
     senderLabel: senderName,
-    content: cleanTextWithAttachments,
+    content: contentForAgent,
     quotedContent,
   });
 
@@ -382,6 +522,11 @@ export async function processTypeXMessage(
     SenderId: senderId,
     Provider: CHANNEL_ID,
     Surface: CHANNEL_ID,
+    DeliveryContext: {
+      channel: CHANNEL_ID,
+      to: typexTo,
+      accountId: route.accountId ?? accountId,
+    },
     MessageSid: payload.message_id,
     ReplyToBody: quotedContent,
     Timestamp: typeof payload.create_time === "number" ? payload.create_time : Date.now(),
@@ -421,9 +566,78 @@ export async function processTypeXMessage(
             if (v) extractedFromText.push(v);
             return "";
           }).trim();
-          if (extractedFromText.length > 0) {
-            logger?.info?.(`[typex:${accountId}] extracted outbound media directives: ${extractedFromText.join(", ")}`);
-            console.log('extracted outbound media directives', extractedFromText);
+        }
+
+        const generatedText = text?.trim() ?? "";
+        if (explicitSendIntent) {
+          const targetLabel =
+            explicitSendIntent.kind === "dm-send-by-name"
+              ? explicitSendIntent.recipient
+              : explicitSendIntent.memberName;
+          logger?.info(
+            `[typex:${accountId}] executing explicit send fallback kind=${explicitSendIntent.kind} target=${targetLabel}`,
+          );
+          const hasSendableContent =
+            (explicitSendIntent.includeGeneratedText && generatedText.length > 0) ||
+            (explicitSendIntent.includeAttachments && attachmentPaths.length > 0);
+          if (!hasSendableContent) {
+            return;
+          }
+          try {
+            if (explicitSendIntent.kind === "dm-send-by-name") {
+              const messageToSend = explicitSendIntent.includeGeneratedText ? generatedText : "";
+              const mediaPathsToSend = explicitSendIntent.includeAttachments ? attachmentPaths : [];
+              await executeTypeXSendByName({
+                cfg,
+                accountId,
+                recipient: explicitSendIntent.recipient,
+                message: messageToSend,
+                mediaPaths: mediaPathsToSend,
+              });
+              await sendMessageTypeX(
+                client,
+                chatId,
+                `已代发给 ${explicitSendIntent.recipient}。`,
+                { msgType: TypeXMessageEnum.richText, replyMsgId: payload.message_id },
+              );
+              logger?.info(
+                `[typex:${accountId}] explicit send completed kind=${explicitSendIntent.kind} target=${explicitSendIntent.recipient}`,
+              );
+              return;
+            }
+
+            const messageToSend = explicitSendIntent.includeGeneratedText ? generatedText : "";
+            const mediaPathsToSend = explicitSendIntent.includeAttachments ? attachmentPaths : [];
+            await executeTypeXSendInGroup({
+              cfg,
+              accountId,
+              chatId,
+              memberName: explicitSendIntent.memberName,
+              message: messageToSend,
+              mediaPaths: mediaPathsToSend,
+            });
+            await sendMessageTypeX(
+              client,
+              chatId,
+              `已在群里发送给 ${explicitSendIntent.memberName}。`,
+              { msgType: TypeXMessageEnum.richText, replyMsgId: payload.message_id },
+            );
+            logger?.info(
+              `[typex:${accountId}] explicit send completed kind=${explicitSendIntent.kind} target=${explicitSendIntent.memberName}`,
+            );
+            return;
+          } catch (error: any) {
+            const message = error?.message ?? String(error);
+            logger?.warn?.(
+              `[typex:${accountId}] explicit send fallback failed: ${message}`,
+            );
+            await sendMessageTypeX(
+              client,
+              chatId,
+              `发送失败：${message}`,
+              { msgType: TypeXMessageEnum.richText, replyMsgId: payload.message_id },
+            );
+            return;
           }
         }
 
@@ -438,8 +652,6 @@ export async function processTypeXMessage(
             : [];
 
         for (const url of [...urls, ...extractedFromText]) {
-          logger?.info?.(`[typex:${accountId}] sending outbound mediaUrl=${url}`);
-          console.log('sending outbound mediaUrl', url);
           await sendMessageTypeX(client, chatId, {}, { mediaUrl: url, msgType: TypeXMessageEnum.richText, replyMsgId: payload.message_id });
         }
       },

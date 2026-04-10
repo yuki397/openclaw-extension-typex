@@ -1,10 +1,56 @@
-import { WizardPrompter } from "openclaw/plugin-sdk";
-import { TypeXMessageEnum, type TypeXClientOptions, type TypeXMessageEntry } from "./types.js";
-
-const TYPEX_DOMAIN = "https://api-coco.typex.im";
-// const TYPEX_DOMAIN = "https://api-tx.bossjob.net.cn";
+import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
+import { TYPEX_DOMAIN } from "./domain.js";
+import {
+  TypeXMessageEnum,
+  type TypeXClientOptions,
+  type TypeXContactSearchEntry,
+  type TypeXFeedSearchEntry,
+  type TypeXGroupMemberEntry,
+  type TypeXMessageEntry,
+} from "./types.js";
 
 let prompter: WizardPrompter | undefined;
+
+type TypeXSendOptions = {
+  replyMsgId?: string;
+  receiverId?: string;
+  isDelegate?: boolean;
+  atUserIds?: string[];
+  atMentions?: Array<{ id: string; name: string }>;
+};
+
+function isSessionAuthFailure(status: number, bodyText: string, resJson?: { code?: number; msg?: string; message?: string }) {
+  const combined = `${bodyText} ${resJson?.msg ?? ""} ${resJson?.message ?? ""}`.toLowerCase();
+  return status === 401 || combined.includes("session auth error");
+}
+
+function summarizeInvalidResponse(status: number, bodyText: string): string {
+  const normalized = bodyText.replace(/\s+/g, " ").trim();
+  const htmlTitle = normalized.match(/<title>(.*?)<\/title>/i)?.[1]?.trim();
+  const htmlHeading = normalized.match(/<h1>(.*?)<\/h1>/i)?.[1]?.trim();
+  const summary = htmlTitle || htmlHeading || normalized.slice(0, 120) || "unexpected response body";
+  return `HTTP ${status} - ${summary}`;
+}
+
+function buildTextContent(content: string | object) {
+  return typeof content === "string" ? { text: content } : content;
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function buildMentionRichText(text: string, mentions: Array<{ id: string; name: string }>) {
+  const mentionMarkup = mentions
+    .map((mention) => `<at userid="${escapeHtml(mention.id)}">${escapeHtml(mention.name)}</at>`)
+    .join("&nbsp;");
+  const suffix = text.trim() ? `&nbsp;${escapeHtml(text.trim())}` : "";
+  return `<p>${mentionMarkup}${suffix}</p>`;
+}
 
 export class TypeXClient {
   private options: TypeXClientOptions;
@@ -28,6 +74,46 @@ export class TypeXClient {
 
   async getCurUserId() {
     return this.userId ?? "";
+  }
+
+  private getAuthHeaders(extraHeaders: Record<string, string> = {}) {
+    if (!this.accessToken) {
+      throw new Error("TypeXClient: Not authenticated.");
+    }
+
+    return this.mode === "bot"
+      ? { Authorization: `Bearer ${this.accessToken}`, ...extraHeaders }
+      : { Cookie: this.accessToken, ...extraHeaders };
+  }
+
+  private async postJson<T>(endpoint: string, payload: unknown): Promise<T> {
+    const response = await fetch(`${TYPEX_DOMAIN}${endpoint}`, {
+      method: "POST",
+      headers: this.getAuthHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify(payload),
+    });
+
+    const bodyText = await response.text();
+    let resJson: { code?: number; msg?: string; message?: string; data?: T };
+    try {
+      resJson = JSON.parse(bodyText);
+    } catch {
+      if (isSessionAuthFailure(response.status, bodyText)) {
+        throw new Error("TypeX 用户登录态已失效，请在 OpenClaw 中重新扫码登录 TypeX user 账号后再试。");
+      }
+      throw new Error(`TypeX API ${endpoint} returned invalid JSON: ${summarizeInvalidResponse(response.status, bodyText)}`);
+    }
+
+    if (!response.ok || resJson.code !== 0) {
+      if (isSessionAuthFailure(response.status, bodyText, resJson)) {
+        throw new Error("TypeX 用户登录态已失效，请在 OpenClaw 中重新扫码登录 TypeX user 账号后再试。");
+      }
+      throw new Error(
+        `TypeX API ${endpoint} failed: [${resJson.code ?? response.status}] ${resJson.msg || resJson.message || "unknown error"}`,
+      );
+    }
+
+    return (resJson.data ?? []) as T;
   }
 
   async fetchQrcodeUrl() {
@@ -65,62 +151,20 @@ export class TypeXClient {
     return false;
   }
 
-  /**
-   * Send a message to a specific chat (group or DM).
-   * @param to  chat_id to send to
-   * @param content  message text or object
-   */
-  async sendMessage(to: string, content: string | object, msgType: TypeXMessageEnum = 0, options: { replyMsgId?: string } = {}) {
-    const token = this.accessToken;
-    if (!token) throw new Error("TypeXClient: Not authenticated.");
+  private async executeSendMessage(
+    endpoint: string,
+    to: string,
+    payload: Record<string, unknown>,
+    preview: string,
+  ) {
+    if (!this.accessToken) throw new Error("TypeXClient: Not authenticated.");
+    if (prompter) prompter.note(`TypeXClient sending to ${to}: ${preview.slice(0, 80)}`);
 
-    let finalContent = content;
-    if (typeof content === "object") {
-      try { finalContent = JSON.stringify(content); } catch { finalContent = String(content as unknown); }
-    }
-
-    if (prompter) prompter.note(`TypeXClient sending to ${to}: ${String(finalContent).slice(0, 80)}`);
-    else console.log(`TypeXClient sending to ${to}: ${String(finalContent).slice(0, 80)}`);
-
-    const isBot = this.mode === "bot";
-    const endpoint = isBot ? "/open/robot/send_message" : "/open/claw/send_message";
-
-    let payloadStr: string;
-    if (isBot) {
-      let botContentObj: any;
-      if (msgType === TypeXMessageEnum.text || msgType === TypeXMessageEnum.richText) {
-        // According to docs, text type content format: {"text":"test"}
-        // Assuming content or finalContent holds the actual string text.
-        botContentObj = {
-          text: typeof content === "string" ? content : (typeof finalContent === "string" ? finalContent : JSON.stringify(content))
-        };
-        // Ensure msgType is 0 when sending to `/open/robot/send_message` since 8 might not be supported natively by robot API
-        msgType = TypeXMessageEnum.text;
-      } else {
-        // Image or File object payload for bot
-        botContentObj = typeof finalContent === "string" ? { text: finalContent } : content;
-      }
-
-      payloadStr = JSON.stringify({
-        chat_id: to,
-        content: botContentObj,
-        msg_type: msgType,
-        reply_msg_id: options.replyMsgId || "0",
-      });
-    } else {
-      payloadStr = JSON.stringify({
-        chat_id: to,
-        content: { text: finalContent },
-        msg_type: msgType,
-      });
-    }
+    const payloadStr = JSON.stringify(payload);
 
     const response = await fetch(`${TYPEX_DOMAIN}${endpoint}`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(isBot ? { Authorization: `Bearer ${token}` } : { Cookie: token }),
-      },
+      headers: this.getAuthHeaders({ "Content-Type": "application/json" }),
       body: payloadStr,
     });
 
@@ -129,13 +173,158 @@ export class TypeXClient {
     try {
       resJson = JSON.parse(bodyText);
     } catch (e) {
-      throw new Error(`Send message failed (invalid JSON): HTTP ${response.status} - ${bodyText}`);
+      if (isSessionAuthFailure(response.status, bodyText)) {
+        throw new Error("TypeX 用户登录态已失效，请在 OpenClaw 中重新扫码登录 TypeX user 账号后再试。");
+      }
+      throw new Error(`Send message failed (invalid JSON): ${summarizeInvalidResponse(response.status, bodyText)}`);
     }
 
     if (resJson.code !== 0) {
+      if (isSessionAuthFailure(response.status, bodyText, resJson)) {
+        throw new Error("TypeX 用户登录态已失效，请在 OpenClaw 中重新扫码登录 TypeX user 账号后再试。");
+      }
       throw new Error(`Send message failed: [${resJson.code}] ${resJson.msg || resJson.message}`);
     }
     return resJson.data || { message_id: `msg_${Date.now()}` };
+  }
+
+  async sendUserChatMessage(
+    chatId: string,
+    content: string | object,
+    msgType: TypeXMessageEnum = TypeXMessageEnum.text,
+  ) {
+    return this.executeSendMessage(
+      "/open/claw/send_message",
+      chatId,
+      {
+        chat_id: chatId,
+        content: buildTextContent(content),
+        msg_type: msgType,
+      },
+      typeof content === "string" ? content : JSON.stringify(content),
+    );
+  }
+
+  async sendDelegatedChatMessage(
+    chatId: string,
+    content: string | object,
+    msgType: TypeXMessageEnum = TypeXMessageEnum.text,
+  ) {
+    return this.executeSendMessage(
+      "/open/claw/send_message",
+      chatId,
+      {
+        chat_id: chatId,
+        content: buildTextContent(content),
+        msg_type: msgType,
+        is_delegate: true,
+      },
+      typeof content === "string" ? content : JSON.stringify(content),
+    );
+  }
+
+  async sendDelegatedContactMessage(
+    receiverId: string,
+    content: string | object,
+    msgType: TypeXMessageEnum = TypeXMessageEnum.text,
+  ) {
+    return this.executeSendMessage(
+      "/open/claw/send_message",
+      receiverId,
+      {
+        receiver_id: receiverId,
+        content: buildTextContent(content),
+        msg_type: msgType,
+        is_delegate: true,
+      },
+      typeof content === "string" ? content : JSON.stringify(content),
+    );
+  }
+
+  async sendBotGroupMessage(
+    chatId: string,
+    content: string | object,
+    msgType: TypeXMessageEnum = TypeXMessageEnum.text,
+    options: Pick<TypeXSendOptions, "replyMsgId" | "atUserIds" | "atMentions"> = {},
+  ) {
+    const mentionIds = Array.isArray(options.atUserIds) && options.atUserIds.length > 0 ? options.atUserIds : undefined;
+    const mentionEntries = Array.isArray(options.atMentions) && options.atMentions.length > 0 ? options.atMentions : undefined;
+    const normalizedMsgType =
+      msgType === TypeXMessageEnum.text || msgType === TypeXMessageEnum.richText
+        ? TypeXMessageEnum.text
+        : msgType;
+    const normalizedContent =
+      normalizedMsgType === TypeXMessageEnum.text
+        ? {
+          text:
+            mentionEntries && mentionEntries.length > 0
+              ? buildMentionRichText(typeof content === "string" ? content : JSON.stringify(content), mentionEntries)
+              : typeof content === "string"
+                ? content
+                : JSON.stringify(content),
+          at_user_ids: mentionIds,
+        }
+        : typeof content === "object" && content !== null
+          ? {
+            ...content,
+            at_user_ids: mentionIds,
+          }
+          : content;
+
+    return this.executeSendMessage(
+      "/open/robot/send_message",
+      chatId,
+      {
+        chat_id: chatId,
+        content: normalizedContent,
+        msg_type: normalizedMsgType,
+        reply_msg_id: options.replyMsgId || "0",
+      },
+      typeof content === "string" ? content : JSON.stringify(content),
+    );
+  }
+
+  /**
+   * Compatibility wrapper. Prefer the explicit methods above for new call sites.
+   */
+  async sendMessage(
+    to: string,
+    content: string | object,
+    msgType: TypeXMessageEnum = TypeXMessageEnum.text,
+    options: TypeXSendOptions = {},
+  ) {
+    if (this.mode === "bot") {
+      return this.sendBotGroupMessage(to, content, msgType, {
+        replyMsgId: options.replyMsgId,
+        atUserIds: options.atUserIds,
+        atMentions: options.atMentions,
+      });
+    }
+
+    if (options.isDelegate && options.receiverId) {
+      return this.sendDelegatedContactMessage(options.receiverId, content, msgType);
+    }
+
+    if (options.isDelegate) {
+      return this.sendDelegatedChatMessage(to, content, msgType);
+    }
+
+    return this.sendUserChatMessage(to, content, msgType);
+  }
+
+  async searchFeedsByName(name: string): Promise<TypeXFeedSearchEntry[]> {
+    if (!name.trim()) return [];
+    return this.postJson<TypeXFeedSearchEntry[]>("/open/claw/feeds_by_name", { name });
+  }
+
+  async searchContactsByName(name: string): Promise<TypeXContactSearchEntry[]> {
+    if (!name.trim()) return [];
+    return this.postJson<TypeXContactSearchEntry[]>("/open/claw/contacts_by_name", { name });
+  }
+
+  async listGroupMembers(chatId: string): Promise<TypeXGroupMemberEntry[]> {
+    if (!chatId.trim() || this.mode !== "bot") return [];
+    return this.postJson<TypeXGroupMemberEntry[]>("/open/robot/group_members", { chatid: chatId });
   }
 
   /**
@@ -168,7 +357,7 @@ export class TypeXClient {
     const response = await fetch(`${TYPEX_DOMAIN}/open/robot/upload`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${this.accessToken}`
+        Authorization: `Bearer ${this.accessToken}`,
         // Note: fetch will automatically set the Content-Type boundary
       },
       body: formData,
@@ -178,6 +367,53 @@ export class TypeXClient {
     if (resJson.code !== 0) {
       throw new Error(`Upload resource failed: [${resJson.code}] ${resJson.msg || resJson.message}`);
     }
+    return resJson.data;
+  }
+
+  async uploadUserResource(
+    fileName: string,
+    fileType: "image" | "audio" | "video" | "application",
+    fileContent: Buffer | Blob,
+    chatId: string,
+  ) {
+    if (this.mode !== "user" || !this.accessToken) {
+      throw new Error("TypeXClient: uploadUserResource requires user mode and a session token.");
+    }
+
+    const formData = new FormData();
+    formData.append("chat_id", chatId);
+    formData.append("file_name", fileName);
+    formData.append("file_type", fileType);
+
+    const blob = fileContent instanceof Buffer ? new Blob([fileContent as unknown as BlobPart]) : fileContent;
+    formData.append("file_content", blob as Blob, fileName);
+
+    const response = await fetch(`${TYPEX_DOMAIN}/open/upload`, {
+      method: "POST",
+      headers: {
+        Cookie: this.accessToken,
+      },
+      body: formData,
+    });
+
+    const bodyText = await response.text();
+    let resJson: { code?: number; msg?: string; message?: string; data?: any };
+    try {
+      resJson = JSON.parse(bodyText);
+    } catch {
+      if (isSessionAuthFailure(response.status, bodyText)) {
+        throw new Error("TypeX 用户登录态已失效，请在 OpenClaw 中重新扫码登录 TypeX user 账号后再试。");
+      }
+      throw new Error(`Upload user resource failed (invalid JSON): ${summarizeInvalidResponse(response.status, bodyText)}`);
+    }
+
+    if (!response.ok || resJson.code !== 0) {
+      if (isSessionAuthFailure(response.status, bodyText, resJson)) {
+        throw new Error("TypeX 用户登录态已失效，请在 OpenClaw 中重新扫码登录 TypeX user 账号后再试。");
+      }
+      throw new Error(`Upload user resource failed: [${resJson.code ?? response.status}] ${resJson.msg || resJson.message || "unknown error"}`);
+    }
+
     return resJson.data;
   }
 
@@ -193,70 +429,59 @@ export class TypeXClient {
   /** Pull messages for a regular user account (sessionid cookie auth). */
   private async fetchUserMessages(pos: number): Promise<TypeXMessageEntry[]> {
     if (!this.accessToken) return [];
+    const response = await fetch(`${TYPEX_DOMAIN}/open/claw/message`, {
+      method: "POST",
+      headers: { Cookie: this.accessToken, "Content-Type": "application/json" },
+      body: JSON.stringify({ pos }),
+    });
+
+    const bodyText = await response.text();
+    let resJson: { code?: number; msg?: string; message?: string; data?: TypeXMessageEntry[] };
     try {
-      const response = await fetch(`${TYPEX_DOMAIN}/open/claw/message`, {
-        method: "POST",
-        headers: { Cookie: this.accessToken, "Content-Type": "application/json" },
-        body: JSON.stringify({ pos }),
-      });
-
-      if (response.status === 401) {
-        throw new Error("Unauthorized: 401 Token is invalid or expired.");
-      }
-      if (!response.ok) {
-        throw new Error(`HTTP Error: ${response.status}`);
-      }
-
-      const resJson = await response.json();
-
-      if (resJson.code !== 0) {
-        throw new Error(`API Error: code ${resJson.code}, message: ${resJson.msg}`);
-      }
-      return Array.isArray(resJson.data) ? resJson.data : [];
-    } catch (e) {
-      if (e instanceof Error && e.message.includes("Unauthorized")) {
-        throw e;
-      }
-
-      console.log(`Fetch messages error: ${e}`);
-      return [];
+      resJson = JSON.parse(bodyText);
+    } catch {
+      throw new Error(
+        `TypeX user poll returned non-JSON response: ${summarizeInvalidResponse(response.status, bodyText)}`,
+      );
     }
+
+    if (!response.ok || resJson.code !== 0) {
+      throw new Error(
+        `TypeX user poll failed: HTTP ${response.status} - ${resJson.msg || resJson.message || "unknown error"}`,
+      );
+    }
+
+    return Array.isArray(resJson.data) ? resJson.data : [];
   }
 
   /**
    * Pull messages for a bot account (Bearer token auth).
-   * TODO: replace /open/bot/message with the actual endpoint path once confirmed.
    */
   private async fetchBotMessages(): Promise<TypeXMessageEntry[]> {
     if (!this.accessToken) return [];
+    const response = await fetch(`${TYPEX_DOMAIN}/open/robot/message/pull`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${this.accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ limit: 5 }),
+    });
+
+    const bodyText = await response.text();
+    let resJson: { code?: number; msg?: string; message?: string; data?: { messages?: TypeXMessageEntry[] } };
     try {
-      const response = await fetch(`${TYPEX_DOMAIN}/open/robot/message/pull`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${this.accessToken}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ limit: 5 }),
-      });
-
-      if (response.status === 401) {
-        throw new Error("Unauthorized: 401 Bot Token is invalid or expired.");
-      }
-      if (!response.ok) {
-        throw new Error(`HTTP Error: ${response.status}`);
-      }
-
-      const resJson = await response.json();
-
-      if (resJson.code !== 0) {
-        return [];
-      }
-      return Array.isArray(resJson.data?.messages) ? resJson.data.messages : [];
-    } catch (e) {
-      if (e instanceof Error && e.message.includes("Unauthorized")) {
-        throw e;
-      }
-
-      console.log(`Bot fetch messages error: ${e}`);
-      return [];
+      resJson = JSON.parse(bodyText);
+    } catch {
+      throw new Error(
+        `TypeX bot poll returned non-JSON response: ${summarizeInvalidResponse(response.status, bodyText)}`,
+      );
     }
+
+    if (!response.ok || resJson.code !== 0) {
+      throw new Error(
+        `TypeX bot poll failed: HTTP ${response.status} - ${resJson.msg || resJson.message || "unknown error"}`,
+      );
+    }
+
+    return Array.isArray(resJson.data?.messages) ? resJson.data.messages : [];
   }
 
   /**
@@ -284,19 +509,22 @@ export class TypeXClient {
    * Requires Bot Token authentication.
    */
   async fetchFileBuffer(objectKey: string, size?: string): Promise<{ buffer: Buffer; mimeType: string } | null> {
-    if (!this.accessToken || this.mode !== "bot") return null;
+    if (!this.accessToken) return null;
     try {
       const query = new URLSearchParams({ object_key: objectKey });
       if (size) query.append("size", size);
-      const url = `${TYPEX_DOMAIN}/open/robot/chat/file?${query.toString()}`;
+      const isBot = this.mode === "bot";
+      const url = isBot
+        ? `${TYPEX_DOMAIN}/open/robot/chat/file?${query.toString()}`
+        : `${TYPEX_DOMAIN}/open/file?${query.toString()}`;
 
       const response = await fetch(url, {
         method: "GET",
-        headers: { Authorization: `Bearer ${this.accessToken}` },
+        headers: this.getAuthHeaders(),
       });
 
       if (!response.ok) {
-        console.log(`fetchFileBuffer failed with status: ${response.status} ${response.statusText} for url: ${url}`);
+        console.warn(`fetchFileBuffer failed with status: ${response.status} ${response.statusText} for url: ${url}`);
         return null;
       }
 
@@ -306,8 +534,68 @@ export class TypeXClient {
 
       return { buffer, mimeType };
     } catch (e) {
-      console.log(`fetchFileBuffer error: ${e}`);
+      console.error(`fetchFileBuffer error: ${e}`);
       return null;
+    }
+  }
+
+  /**
+   * Search feeds by name (User mode)
+   */
+  async fetchFeedsByName(name: string): Promise<Array<{ id: string; name: string }>> {
+    if (!this.accessToken || this.mode !== "user") return [];
+    try {
+      const response = await fetch(`${TYPEX_DOMAIN}/open/claw/feeds_by_name`, {
+        method: "POST",
+        headers: { Cookie: this.accessToken, "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      const resJson = await response.json();
+      if (resJson.code !== 0) return [];
+      return Array.isArray(resJson.data) ? resJson.data : [];
+    } catch (e) {
+      console.error(`fetchFeedsByName error: ${e}`);
+      return [];
+    }
+  }
+
+  /**
+   * Search contacts by name (User mode)
+   */
+  async fetchContactsByName(name: string): Promise<Array<{ id: string; name: string; alias?: string }>> {
+    if (!this.accessToken || this.mode !== "user") return [];
+    try {
+      const response = await fetch(`${TYPEX_DOMAIN}/open/claw/contacts_by_name`, {
+        method: "POST",
+        headers: { Cookie: this.accessToken, "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      const resJson = await response.json();
+      if (resJson.code !== 0) return [];
+      return Array.isArray(resJson.data) ? resJson.data : [];
+    } catch (e) {
+      console.error(`fetchContactsByName error: ${e}`);
+      return [];
+    }
+  }
+
+  /**
+   * Search group members by name (Bot mode)
+   */
+  async fetchGroupMembersByName(name: string): Promise<Array<{ id: string; name: string; group_alias?: string }>> {
+    if (!this.accessToken || this.mode !== "bot") return [];
+    try {
+      const response = await fetch(`${TYPEX_DOMAIN}/open/claw/group_members`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${this.accessToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      const resJson = await response.json();
+      if (resJson.code !== 0) return [];
+      return Array.isArray(resJson.data) ? resJson.data : [];
+    } catch (e) {
+      console.error(`fetchGroupMembersByName error: ${e}`);
+      return [];
     }
   }
 }

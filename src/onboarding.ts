@@ -1,4 +1,4 @@
-import type { ChannelOnboardingAdapter } from "openclaw/plugin-sdk";
+import type { ChannelSetupWizardAdapter } from "openclaw/plugin-sdk/setup";
 import qrcode from "qrcode-terminal";
 import { resolveDefaultTypeXAccountId } from "./client/accounts.js";
 import { getTypeXClient } from "./client/client.js";
@@ -16,7 +16,7 @@ function extractQrCodeId(qrcodeData: string): string {
   }
 }
 
-export const typexOnboardingAdapter: ChannelOnboardingAdapter = {
+export const typexSetupWizard: ChannelSetupWizardAdapter = {
   channel: CHANNEL_ID,
   getStatus: async ({ cfg }) => {
     const accountId = resolveDefaultTypeXAccountId(cfg);

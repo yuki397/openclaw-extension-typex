@@ -6,6 +6,10 @@ export type TypeXSendOpts = {
   mediaUrl?: string;
   maxBytes?: number;
   replyMsgId?: string;
+  receiverId?: string;
+  isDelegate?: boolean;
+  atUserIds?: string[];
+  atMentions?: Array<{ id: string; name: string }>;
 };
 
 /**
@@ -18,7 +22,7 @@ export type TypeXSendOpts = {
 export async function sendMessageTypeX(
   client: TypeXClient,
   chatId: string,
-  content: string | { text?: string; object_url?: string; file_name?: string; file_size?: number; file_type?: string; width?: number; height?: number },
+  content: string | { text?: string; object_url?: string; thumb_url?: string; file_name?: string; file_size?: number; file_type?: string; width?: number; height?: number },
   opts: TypeXSendOpts = {},
 ) {
   let msgType = opts.msgType ?? TypeXMessageEnum.text;
@@ -88,6 +92,16 @@ export async function sendMessageTypeX(
     }
   }
 
-  const res = await client.sendMessage(chatId, finalContent, msgType, { replyMsgId: opts.replyMsgId });
+  const res = client.mode === "bot"
+    ? await client.sendBotGroupMessage(chatId, finalContent, msgType, {
+      replyMsgId: opts.replyMsgId,
+      atUserIds: opts.atUserIds,
+      atMentions: opts.atMentions,
+    })
+    : opts.isDelegate && opts.receiverId
+      ? await client.sendDelegatedContactMessage(opts.receiverId, finalContent, msgType)
+      : opts.isDelegate
+        ? await client.sendDelegatedChatMessage(chatId, finalContent, msgType)
+        : await client.sendUserChatMessage(chatId, finalContent, msgType);
   return res;
 }

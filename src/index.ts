@@ -1,21 +1,20 @@
+import { defineChannelPluginEntry } from "openclaw/plugin-sdk/channel-core";
 import { typexPlugin } from "./plugin.js";
 import { normalizeTypeXTarget } from "./normalize.js";
-import { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { setTypeXRuntime } from "./client/runtime.js";
 
 const plugin = {
   ...typexPlugin,
   messaging: {
     normalizeTarget: normalizeTypeXTarget,
-    targetResolver: {
-      looksLikeId: () => true,
-      hint: "chat_id",
-    },
-  },
-  register(api: OpenClawPluginApi) {
-    setTypeXRuntime(api.runtime);
-    api.registerChannel(typexPlugin);
+    targetResolver: typexPlugin.messaging.targetResolver,
   },
 };
 
-export = plugin;
+export default defineChannelPluginEntry({
+  id: plugin.id,
+  name: plugin.meta.label,
+  description: plugin.meta.blurb,
+  plugin,
+  setRuntime: setTypeXRuntime,
+});
